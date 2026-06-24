@@ -32,4 +32,4 @@ class SignalResult(BaseModel):
     drift_flag: bool
     signals: List[SectorSignal]
     warnings: List[str]
-    phase: str = ""   # 新增字段
+    phase: str = ""
