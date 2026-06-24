@@ -97,3 +97,10 @@ shadow:
     - aggressive
     - momentum
     - mean_reversion
+
+# 消息面烈度评分配置
+sentiment:
+  enabled: true
+  cache_ttl: 3600
+  # 天行数据配置（可选）
+  tianxing_enabled: true
