@@ -10,7 +10,30 @@ health:
   base_score: 85
   warning_penalty: 10
 
-# 持仓映射（基金代码 → 板块）
+# 五阶段配置
+phases:
+  pre:
+    name: "盘前预测"
+    trust_adjustment: 0.95
+    emoji: "🌅"
+  intraday_a:
+    name: "盘中A"
+    trust_adjustment: 1.0
+    emoji: "📈"
+  intraday_b:
+    name: "盘中B"
+    trust_adjustment: 1.0
+    emoji: "📊"
+  post:
+    name: "盘后复盘"
+    trust_adjustment: 1.0
+    emoji: "📋"
+  night:
+    name: "夜间预测"
+    trust_adjustment: 0.90
+    emoji: "🌙"
+
+# 持仓映射
 holdings:
   009777:
     name: "中欧阿尔法混合C"
