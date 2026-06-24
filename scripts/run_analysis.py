@@ -1,6 +1,11 @@
 # 全链路分析脚本（模拟数据 + 核心逻辑）
 # 对应 01-full-analysis.yml
 
+import sys
+import os
+# 将项目根目录添加到Python路径（让所有模块都能被找到）
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import json
 from data_adapter.mock_adapter import MockDataAdapter
 from core.state_machine import VSystemStateMachine
