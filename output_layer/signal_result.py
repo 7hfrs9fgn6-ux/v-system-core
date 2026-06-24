@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from enum import Enum
 
 class FreshnessLevel(str, Enum):
@@ -9,27 +9,31 @@ class FreshnessLevel(str, Enum):
 
 class SectorSignal(BaseModel):
     name: str
-    signal_level: int          # -2 到 4
-    drawdown: float            # 当前回撤（%）
-    threshold: float           # 黄金坑阈值（%）
+    signal_level: int
+    drawdown: float
+    threshold: float
     key_driver: Optional[str] = None
 
 class StandardMarketData(BaseModel):
     timestamp: str
     freshness: FreshnessLevel
     sectors: List[SectorSignal]
-    index_trend: str           # bull / bear / range
+    index_trend: str
     north_flow: Optional[float] = None
 
 class SignalResult(BaseModel):
     version: str = "V1.1.55"
     analysis_time: str
-    overall_suggestion: str    # 偏多 / 偏空 / 震荡
-    trust_score: float         # 0.00 ~ 1.00
-    health_score: int          # 0 ~ 100
-    judge_status: str          # 正常 / 偏低 / 需谨慎
-    agent_mode: str            # AI分析 / 规则分析 / AI已暂停
+    overall_suggestion: str
+    trust_score: float
+    health_score: int
+    judge_status: str
+    agent_mode: str
     drift_flag: bool
     signals: List[SectorSignal]
     warnings: List[str]
     phase: str = ""
+    # ✅ 新增：消息面烈度评分结果
+    sentiment: Optional[Dict[str, Any]] = None
+    # ✅ 新增：影子系统结果
+    shadow: Optional[Dict[str, Any]] = None
