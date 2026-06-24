@@ -1,0 +1,35 @@
+# V系统策略配置文件
+# 修改这里可以调整系统行为，无需改动代码
+
+trust:
+  # 信任度阈值
+  fresh_threshold: 0.70      # >= 此值 → "判断正常"
+  stale_threshold: 0.50      # 0.50~0.70 → "判断偏低"
+  expired_threshold: 0.30    # < 0.50 → "需谨慎"
+  default_trust: 0.76        # 系统初始信任度
+  penalty_rate: 0.90         # 安全违规时信任度乘以的系数
+
+health:
+  base_score: 85             # 健康度基础分
+  warning_penalty: 10        # 每条告警扣分
+
+# 持仓映射（也可以在这里配置）
+holdings:
+  009777:
+    name: "中欧阿尔法混合C"
+    sectors: ["电子", "计算机", "通信"]
+  006229:
+    name: "中欧医疗创新股票C"
+    sectors: ["医药生物"]
+  001632:
+    name: "天弘食品饮料ETF联接C"
+    sectors: ["食品饮料"]
+  260108:
+    name: "景顺长城新兴成长A"
+    sectors: ["食品饮料", "家用电器"]
+  012414:
+    name: "招商中证白酒指数C"
+    sectors: ["食品饮料"]
+  012417:
+    name: "招商国证生物医药C"
+    sectors: ["医药生物"]
