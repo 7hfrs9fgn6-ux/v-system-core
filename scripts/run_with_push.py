@@ -4,7 +4,6 @@ import argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from data_adapter.real_adapter import RealDataAdapter
-from data_adapter.mock_adapter import MockDataAdapter
 from core.state_machine import VSystemStateMachine
 from output_layer.push_notifier import PushNotifier
 
@@ -12,8 +11,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--phase', 
                         choices=['pre', 'intraday_a', 'intraday_b', 'post', 'night'],
-                        default='pre')
-    parser.add_argument('--mock', action='store_true')
+                        default='post')
+    parser.add_argument('--mock', action='store_true', help='使用模拟数据（测试用）')
     args = parser.parse_args()
 
     phase_names = {
@@ -31,12 +30,14 @@ def main():
     print("\n📊 步骤1：获取数据...")
     if args.mock:
         print("   使用模拟数据（测试模式）")
+        from data_adapter.mock_adapter import MockDataAdapter
         adapter = MockDataAdapter()
     else:
-        print("   使用真实数据（Tushare/AKShare）")
+        print("   使用真实数据（AKShare 主 / Tushare 备）")
         adapter = RealDataAdapter(phase=args.phase)
+
     market_data = adapter.fetch_all()
-    print(f"   ✅ 数据源: {getattr(adapter, 'data_source', 'Mock')}")
+    print(f"   ✅ 数据源: {getattr(adapter, 'data_source', 'Unknown')}")
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
 
@@ -47,7 +48,7 @@ def main():
 
     print("\n📲 步骤3：推送结果并存储...")
     notifier = PushNotifier()
-    success = notifier.send(result, args.phase)
+    notifier.send(result, args.phase)
 
     print("\n" + "=" * 50)
     print("✅ 闭环执行完成！")
