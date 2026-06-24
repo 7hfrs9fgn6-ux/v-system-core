@@ -1,6 +1,8 @@
 import os
 import yaml
 import requests
+import json
+from datetime import datetime, timedelta
 from output_layer.signal_result import SignalResult
 from output_layer.ai_commentator import AICommentator
 
@@ -15,6 +17,11 @@ class PushNotifier:
             self.holding_sectors.extend(fund.get("sectors", []))
         self.holding_sectors = list(set(self.holding_sectors))
         self.phase_config = self.config.get("phases", {})
+        self.alert_config = self.config.get("alert", {})
+        self.alert_enabled = self.alert_config.get("enabled", False)
+        self.alert_cooldown = self.alert_config.get("cooldown_hours", 24)
+        # 简单内存缓存，实际生产可改用 Redis
+        self._alert_cache = {}
 
     def _load_config(self, path):
         if os.path.exists(path):
@@ -26,8 +33,11 @@ class PushNotifier:
         if not self.token:
             print("📢 [模拟] 无Token，仅打印")
             print(self._format_message(result, phase))
+            # 仍然尝试存储到 Notion
+            self._store_to_notion(result, phase)
             return False
 
+        # 1. 发送主推送
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         title = f"📊 V系统 {phase_info.get('emoji', '')} {phase_info.get('name', phase)}"
         content = self._format_message(result, phase)
@@ -41,16 +51,79 @@ class PushNotifier:
                 "template": "txt"
             }, timeout=10)
             if resp.json().get("code") == 200:
-                print("✅ 微信推送成功！")
-                return True
+                print("✅ 主推送成功")
             else:
-                print(f"❌ 推送失败: {resp.json()}")
-                return False
+                print(f"❌ 主推送失败: {resp.json()}")
         except Exception as e:
             print(f"❌ 推送异常: {e}")
-            return False
+
+        # 2. 黄金坑预警（仅在 post 阶段检查，避免重复）
+        if self.alert_enabled and phase == "post":
+            self._check_alerts(result)
+
+        # 3. 存储 L3 到 Notion
+        self._store_to_notion(result, phase)
+
+        return True
+
+    def _check_alerts(self, result: SignalResult):
+        """检查是否有板块触发黄金坑预警"""
+        now = datetime.now()
+        for s in result.signals:
+            if s.drawdown >= s.threshold:
+                key = s.name
+                last_alert = self._alert_cache.get(key)
+                if last_alert and (now - last_alert).total_seconds() < self.alert_cooldown * 3600:
+                    continue  # 冷却中
+                # 发送独立预警推送
+                alert_title = self.alert_config.get("push_title", "🔔 黄金坑触发预警")
+                alert_content = f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔔 黄金坑触发预警
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+板块：{s.name}
+当前回撤：{s.drawdown}%
+触发阈值：{s.threshold}%
+超出幅度：{s.drawdown - s.threshold:.1f}%
+信号等级：{s.signal_level}
+时间：{result.analysis_time}
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 建议：关注该板块，可考虑分批建仓
+                """
+                self._send_alert(alert_title, alert_content.strip())
+                self._alert_cache[key] = now
+                print(f"🔔 黄金坑预警已发送: {s.name}")
+
+    def _send_alert(self, title, content):
+        if not self.token:
+            return
+        try:
+            resp = requests.post("http://www.pushplus.plus/send", json={
+                "token": self.token,
+                "title": title,
+                "content": content,
+                "template": "txt"
+            }, timeout=10)
+            if resp.json().get("code") == 200:
+                print("✅ 预警推送成功")
+            else:
+                print(f"❌ 预警推送失败: {resp.json()}")
+        except Exception as e:
+            print(f"❌ 预警推送异常: {e}")
+
+    def _store_to_notion(self, result: SignalResult, phase: str):
+        """调用 Notion 存储"""
+        try:
+            from output_layer.notion_storage import NotionStorage
+            storage = NotionStorage(self.config)
+            storage.store(result, phase)
+        except ImportError:
+            print("ℹ️  NotionStorage 未找到，跳过存储")
+        except Exception as e:
+            print(f"❌ Notion 存储失败: {e}")
 
     def _format_message(self, result: SignalResult, phase: str) -> str:
+        # 与之前相同，略作精简，但保持完整
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         phase_text = phase_info.get("name", phase)
         emoji = phase_info.get("emoji", "📊")
@@ -91,8 +164,8 @@ class PushNotifier:
         weakest = min(non_holding, key=lambda x: x.signal_level) if non_holding else None
 
         def format_signal(s, prefix=""):
-            emoji_signal = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠" if s.signal_level >= -1 else "🔴"
-            return f"{prefix}{emoji_signal} {s.name} (回撤{s.drawdown}% / 阈值{s.threshold}%)"
+            emoji_s = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠" if s.signal_level >= -1 else "🔴"
+            return f"{prefix}{emoji_s} {s.name} (回撤{s.drawdown}% / 阈值{s.threshold}%)"
 
         ai_comment = self.commentator.generate_comment(result, self.holding_sectors)
 
