@@ -196,7 +196,31 @@ class PushNotifier:
 
         # ========== 4. AI点评 ==========
         ai_comment = self.commentator.generate_comment(result, self.holding_sectors)
+   
+        # ========== ✅ 消息面烈度评分（追加到推送） ==========
+        if hasattr(result, 'sentiment') and result.sentiment:
+            lines.append("")
+            lines.append("【📰 消息面烈度评分】")
+            # 只显示持仓板块的烈度评分
+            for fund_code, fund_info in self.holding_map.items():
+                for sec in fund_info.get('sectors', []):
+                    if sec in result.sentiment:
+                        s = result.sentiment[sec]
+                        intensity = s.get('intensity_score', 0)
+                        emotion = s.get('emotion_label', '中性')
+                        bar = "█" * int(intensity) + "░" * (10 - int(intensity))
+                        lines.append(f"    {sec}: {bar} {intensity}/10 ({emotion})")
+                        break  # 只显示第一个匹配板块
 
+        # ========== ✅ 影子系统报告 ==========
+        if hasattr(result, 'shadow') and result.shadow:
+            lines.append("")
+            lines.append("【👻 影子系统】")
+            reliability = result.shadow.get('reliability', {})
+            lines.append(f"    可靠度: {reliability.get('overall_reliability', 0):.2%}")
+            lines.append(f"    共识: {reliability.get('consensus_level', '未知')}")
+            lines.append(f"    📌 {reliability.get('recommendation', '')}")
+        
         # ========== 5. 组装完整推送 ==========
         lines = []
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
