@@ -1,33 +1,25 @@
-# 推送通知器 V2.0.2 风格 + AI点评
-# 支持真实持仓映射 + DeepSeek智能解读
-
 import os
+import yaml
 import requests
 from output_layer.signal_result import SignalResult
 from output_layer.ai_commentator import AICommentator
 
-# ============================================================
-# 📌 你的真实持仓映射（基金代码 → 映射板块列表）
-# ============================================================
-HOLDING_MAP = {
-    "009777": {"name": "中欧阿尔法混合C", "sectors": ["电子", "计算机", "通信"]},
-    "006229": {"name": "中欧医疗创新股票C", "sectors": ["医药生物"]},
-    "001632": {"name": "天弘食品饮料ETF联接C", "sectors": ["食品饮料"]},
-    "260108": {"name": "景顺长城新兴成长A", "sectors": ["食品饮料", "家用电器"]},
-    "012414": {"name": "招商中证白酒指数C", "sectors": ["食品饮料"]},
-    "012417": {"name": "招商国证生物医药C", "sectors": ["医药生物"]},
-}
-
-HOLDING_SECTORS = []
-for fund in HOLDING_MAP.values():
-    HOLDING_SECTORS.extend(fund["sectors"])
-HOLDING_SECTORS = list(set(HOLDING_SECTORS))
-
-
 class PushNotifier:
-    def __init__(self):
+    def __init__(self, config_path="config.yaml"):
         self.token = os.environ.get("PUSHPLUS_TOKEN")
         self.commentator = AICommentator()
+        self.config = self._load_config(config_path)
+        self.holding_map = self.config.get("holdings", {})
+        self.holding_sectors = []
+        for fund in self.holding_map.values():
+            self.holding_sectors.extend(fund.get("sectors", []))
+        self.holding_sectors = list(set(self.holding_sectors))
+
+    def _load_config(self, path):
+        if os.path.exists(path):
+            with open(path, 'r') as f:
+                return yaml.safe_load(f)
+        return {}
 
     def send(self, result: SignalResult, phase: str = "pre") -> bool:
         if not self.token:
@@ -35,7 +27,8 @@ class PushNotifier:
             print(self._format_message(result, phase))
             return False
 
-        title = f"📊 V系统{phase}简报"
+        phase_map = {"pre": "盘前预判", "intraday": "盘中提醒", "post": "盘后复盘"}
+        title = f"📊 V系统{phase_map.get(phase, '分析')}"
         content = self._format_message(result, phase)
         url = "http://www.pushplus.plus/send"
 
@@ -64,43 +57,34 @@ class PushNotifier:
 
         # 持仓信号
         holding_lines = []
-        for fund_code, fund_info in HOLDING_MAP.items():
+        for fund_code, fund_info in self.holding_map.items():
             fund_name = fund_info["name"]
             sectors = fund_info["sectors"]
-
             sector_signals = []
             for sec in sectors:
                 if sec in signal_dict:
                     s = signal_dict[sec]
                     sector_signals.append((sec, s.signal_level, s.drawdown, s.threshold))
-
             if not sector_signals:
                 holding_lines.append(f"  ⚪ {fund_name}：无数据")
                 continue
-
             best = max(sector_signals, key=lambda x: x[1])
             best_sec, best_level, best_dd, best_th = best
-
             if best_level >= 3:
-                emoji = "🟢"
-                status = "机会信号"
+                emoji, status = "🟢", "机会信号"
             elif best_level >= 1:
-                emoji = "🟡"
-                status = "观察中"
+                emoji, status = "🟡", "观察中"
             elif best_level >= -1:
-                emoji = "🟠"
-                status = "风险提示"
+                emoji, status = "🟠", "风险提示"
             else:
-                emoji = "🔴"
-                status = "风险信号"
-
+                emoji, status = "🔴", "风险信号"
             driver = f"（{best_sec}驱动）" if len(sector_signals) > 1 else ""
             holding_lines.append(
                 f"  {emoji} {status} {fund_name}{driver} 回撤{best_dd}% / 阈值{best_th}%"
             )
 
         # 最强/最弱
-        non_holding = [s for s in result.signals if s.name not in HOLDING_SECTORS]
+        non_holding = [s for s in result.signals if s.name not in self.holding_sectors]
         strongest = max(non_holding, key=lambda x: x.signal_level) if non_holding else None
         weakest = min(non_holding, key=lambda x: x.signal_level) if non_holding else None
 
@@ -108,10 +92,8 @@ class PushNotifier:
             emoji = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠" if s.signal_level >= -1 else "🔴"
             return f"{prefix}{emoji} {s.name} (回撤{s.drawdown}% / 阈值{s.threshold}%)"
 
-        # AI点评
-        ai_comment = self.commentator.generate_comment(result, HOLDING_SECTORS)
+        ai_comment = self.commentator.generate_comment(result, self.holding_sectors)
 
-        # 组装
         lines = []
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         lines.append(f"📊 V系统 {phase_text} [{result.analysis_time}]")
@@ -120,35 +102,27 @@ class PushNotifier:
         lines.append(f"【判断状态】{result.judge_status}")
         lines.append(f"【运行模式】{result.agent_mode}")
         lines.append("")
-
         lines.append("【📌 你的持仓信号】")
         if holding_lines:
             lines.extend(holding_lines)
         else:
             lines.append("  （无持仓数据）")
-
         if strongest:
             lines.append("")
             lines.append("【🔥 最强信号（非持仓）】")
             lines.append(f"  {format_signal(strongest)}")
-
         if weakest:
             lines.append("")
             lines.append("【⚠️ 最弱信号（非持仓）】")
             lines.append(f"  {format_signal(weakest)}")
-
-        # AI点评
         lines.append("")
         lines.append("【🤖 AI 点评】")
         lines.append(f"  {ai_comment}")
-
-        # 告警
         lines.append("")
         if result.warnings:
             lines.append(f"⚠️ 告警: {', '.join(result.warnings)}")
         else:
             lines.append("✅ 无异常告警")
-
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         if result.judge_status == "正常":
             advice = "建议正常参考信号决策"
@@ -157,5 +131,4 @@ class PushNotifier:
         else:
             advice = "⚠️ 不建议据此操作"
         lines.append(f"📌 操作指引：{advice}")
-
         return "\n".join(lines)
