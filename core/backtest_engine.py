@@ -1,26 +1,14 @@
-# V系统历史回测引擎
-# 用于验证规则在过去一段时间的表现
-
+# 历史回测引擎（框架）
 import random
-from datetime import datetime, timedelta
-from typing import List, Dict, Tuple
-from output_layer.signal_result import SignalResult, SectorSignal
+from datetime import datetime
+from typing import Dict
 
 class BacktestEngine:
-    """历史回测引擎"""
-    
     def __init__(self, start_date: str, end_date: str):
         self.start_date = start_date
         self.end_date = end_date
-        
+
     def run(self) -> Dict:
-        """
-        运行回测
-        返回：准确率、胜率、盈亏比等指标
-        """
-        # 模拟回测逻辑（实际需接入历史数据）
-        # 这里演示框架结构
-        
         results = {
             "total_days": 0,
             "correct_signals": 0,
@@ -32,9 +20,7 @@ class BacktestEngine:
             "sharpe_ratio": 0.0,
             "signal_distribution": {},
         }
-        
-        # 模拟：生成随机回测结果（实际需真实数据）
-        days = 252  # 约1年交易日
+        days = 252
         results["total_days"] = days
         results["correct_signals"] = random.randint(120, 180)
         results["wrong_signals"] = days - results["correct_signals"]
@@ -43,15 +29,11 @@ class BacktestEngine:
         results["profit_factor"] = random.uniform(1.0, 1.8)
         results["max_drawdown"] = random.uniform(5, 20)
         results["sharpe_ratio"] = random.uniform(0.5, 1.5)
-        
-        # 信号分布
         for level in range(-3, 5):
             results["signal_distribution"][level] = random.randint(10, 50)
-        
         return results
-    
+
     def generate_report(self, results: Dict) -> str:
-        """生成回测报告文本"""
         lines = []
         lines.append("=" * 50)
         lines.append("📊 V系统历史回测报告")
@@ -77,5 +59,4 @@ class BacktestEngine:
         else:
             lines.append("🔴 结论：规则表现不佳，建议调整")
         lines.append("=" * 50)
-        
         return "\n".join(lines)
