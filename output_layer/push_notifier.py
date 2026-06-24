@@ -2,8 +2,10 @@ import os
 import yaml
 import requests
 import time
+from datetime import datetime  # ✅ 修复：导入 datetime
 from output_layer.signal_result import SignalResult
 from output_layer.ai_commentator import AICommentator
+
 
 class PushNotifier:
     def __init__(self, config_path="config.yaml"):
@@ -64,7 +66,7 @@ class PushNotifier:
         success = self._send_with_rate_limit(title, content)
         print("✅ 主推送成功" if success else "❌ 主推送失败")
 
-        # 黄金坑预警（仅post阶段）
+        # 黄金坑预警（仅 post 阶段）
         if self.alert_enabled and phase == "post":
             self._check_alerts_batch(result)
 
@@ -72,7 +74,7 @@ class PushNotifier:
         return success
 
     def _check_alerts_batch(self, result: SignalResult):
-        now = datetime.now()
+        now = datetime.now()  # ✅ 现在 datetime 已导入
         triggered = []
         for s in result.signals:
             if s.drawdown >= s.threshold:
@@ -146,7 +148,7 @@ class PushNotifier:
                 f"  {emoji_s} {status} {fund_name}{driver} 回撤{best_dd}% / 阈值{best_th}%"
             )
 
-        # 最强/最弱
+        # 最强/最弱（非持仓）
         non_holding = [s for s in result.signals if s.name not in self.holding_sectors]
         strongest = max(non_holding, key=lambda x: x.signal_level) if non_holding else None
         weakest = min(non_holding, key=lambda x: x.signal_level) if non_holding else None
@@ -166,7 +168,10 @@ class PushNotifier:
         lines.append(f"【运行模式】{result.agent_mode}")
         lines.append("")
         lines.append("【📌 你的持仓信号】")
-        lines.extend(holding_lines) if holding_lines else lines.append("  （无持仓数据）")
+        if holding_lines:
+            lines.extend(holding_lines)
+        else:
+            lines.append("  （无持仓数据）")
         if strongest:
             lines.append("")
             lines.append("【🔥 最强信号（非持仓）】")
@@ -179,8 +184,16 @@ class PushNotifier:
         lines.append("【🤖 AI 点评】")
         lines.append(f"  {ai_comment}")
         lines.append("")
-        lines.append(f"⚠️ 告警: {', '.join(result.warnings)}" if result.warnings else "✅ 无异常告警")
+        if result.warnings:
+            lines.append(f"⚠️ 告警: {', '.join(result.warnings)}")
+        else:
+            lines.append("✅ 无异常告警")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        advice = "建议正常参考信号决策" if result.judge_status == "正常" else "建议结合其他信息确认" if result.judge_status == "偏低" else "⚠️ 不建议据此操作"
+        if result.judge_status == "正常":
+            advice = "建议正常参考信号决策"
+        elif result.judge_status == "偏低":
+            advice = "建议结合其他信息确认"
+        else:
+            advice = "⚠️ 不建议据此操作"
         lines.append(f"📌 操作指引：{advice}")
         return "\n".join(lines)
