@@ -1,4 +1,5 @@
 # V系统策略配置
+
 trust:
   fresh_threshold: 0.70
   stale_threshold: 0.50
@@ -22,11 +23,14 @@ phases:
     data_days_back: 0
     trust_adjustment: 1.0
     emoji: "📈"
+    # ✅ 新增：盘中阶段启用 AlphaFeed
+    use_alphafeed: true
   intraday_b:
     name: "盘中B"
     data_days_back: 0
     trust_adjustment: 1.0
     emoji: "📊"
+    use_alphafeed: true
   post:
     name: "盘后复盘"
     data_days_back: 0
@@ -61,13 +65,35 @@ holdings:
 
 # Notion 配置
 notion:
-  enabled: true                    # ✅ 改为 true 启用
-  token: ""                        # 留空，从环境变量 NOTION_TOKEN 读取
-  database_id: ""                  # 留空，从环境变量 NOTION_DATABASE_ID 读取
+  enabled: true
+  token: ""
+  database_id: ""
 
-# 黄金坑预警配置
+# 黄金坑预警
 alert:
   enabled: true
   threshold_excess: 0
   cooldown_hours: 24
   push_title: "🔔 黄金坑触发预警"
+
+# ✅ 新增：AlphaFeed 配置
+alphafeed:
+  enabled: true
+  base_url: "https://api.alphafeed.com/v1"
+  # token 从环境变量 ALPHAFEED_API_KEY 读取
+
+# ✅ 新增：消息面烈度评分配置
+sentiment:
+  enabled: true
+  cache_ttl: 3600
+  # search_api_key 从环境变量 SEARCH_API_KEY 读取
+
+# ✅ 新增：影子系统配置
+shadow:
+  enabled: true
+  reliability_threshold: 0.6
+  variants:
+    - conservative
+    - aggressive
+    - momentum
+    - mean_reversion
