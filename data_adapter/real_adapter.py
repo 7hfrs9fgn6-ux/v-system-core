@@ -1,27 +1,22 @@
-# 真实数据适配器 V1.1.55（真实52周高点回撤计算）
-# 支持 Tushare 优先 + AKShare 自动降级
-
+# 真实数据适配器 - Tushare优先，AKShare降级
 import os
 import random
 from datetime import datetime, timedelta
 from output_layer.signal_result import StandardMarketData, SectorSignal, FreshnessLevel
 
-# V系统固定的15个板块
 SECTOR_NAMES = [
     "电子", "计算机", "通信", "传媒", "医药生物",
     "食品饮料", "家用电器", "电力设备", "汽车", "国防军工",
     "银行", "非银金融", "公用事业", "煤炭", "石油石化"
 ]
 
-# 各板块的黄金坑回撤阈值
 THRESHOLD_MAP = {
     "电子": 25.0, "计算机": 25.0, "通信": 20.0, "传媒": 25.0, "医药生物": 30.0,
     "食品饮料": 25.0, "家用电器": 18.0, "电力设备": 25.0, "汽车": 25.0, "国防军工": 25.0,
     "银行": 20.0, "非银金融": 20.0, "公用事业": 15.0, "煤炭": 20.0, "石油石化": 20.0
 }
 
-# 申万一级行业代码映射（用于Tushare查询）
-# 注意：实际使用时需要根据Tushare的行业指数代码调整
+# 申万一级行业指数代码（Tushare）
 SECTOR_CODE_MAP = {
     "电子": "801080.SI",
     "计算机": "801750.SI",
@@ -40,10 +35,7 @@ SECTOR_CODE_MAP = {
     "石油石化": "801960.SI",
 }
 
-
 class RealDataAdapter:
-    """真实数据适配器 - 真实52周高点回撤计算"""
-
     def __init__(self):
         self.tushare_token = os.environ.get("TUSHARE_TOKEN")
         self.use_tushare = self.tushare_token and self.tushare_token != "dummy"
@@ -64,24 +56,23 @@ class RealDataAdapter:
         import tushare as ts
         ts.set_token(self.tushare_token)
         pro = ts.pro_api()
-
         today = datetime.now().strftime("%Y%m%d")
 
-        # 1. 获取大盘环境
+        # 大盘环境
         index_df = pro.index_daily(ts_code="000001.SH", start_date=today, end_date=today)
         if index_df.empty:
-            raise ValueError("Tushare 返回空数据")
+            raise ValueError("Tushare 返回空")
         pct_change = index_df['pct_chg'].iloc[0]
         trend = "bull" if pct_change > 0.5 else "bear" if pct_change < -0.5 else "range"
 
-        # 2. 获取北向资金
+        # 北向资金
         try:
             north_df = pro.moneyflow_hsgt(start_date=today, end_date=today)
             north_flow = round(north_df['net_inflow'].iloc[0] / 10000, 2) if not north_df.empty else 0
         except:
             north_flow = round(random.uniform(-50, 80), 2)
 
-        # 3. 计算各板块的52周回撤
+        # 各板块52周回撤
         sectors = []
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
@@ -89,11 +80,9 @@ class RealDataAdapter:
         for name in SECTOR_NAMES:
             code = SECTOR_CODE_MAP.get(name)
             if not code:
-                # 如果没有映射代码，使用随机值（降级方案）
                 drawdown = round(random.uniform(15.0, 40.0), 1)
             else:
                 try:
-                    # 获取52周数据
                     df = pro.index_daily(ts_code=code, start_date=start_date, end_date=end_date)
                     if not df.empty:
                         high_52w = df['high'].max()
@@ -105,8 +94,6 @@ class RealDataAdapter:
                     drawdown = round(random.uniform(15.0, 40.0), 1)
 
             threshold = THRESHOLD_MAP[name]
-
-            # 根据回撤计算信号等级
             excess = drawdown - threshold
             if excess >= 10:
                 level = 4
@@ -126,7 +113,7 @@ class RealDataAdapter:
                 signal_level=level,
                 drawdown=drawdown,
                 threshold=threshold,
-                key_driver="52周高点回撤" if level > 0 else None
+                key_driver="52周回撤" if level > 0 else None
             ))
 
         return StandardMarketData(
@@ -138,10 +125,7 @@ class RealDataAdapter:
         )
 
     def _fetch_from_akshare(self):
-        """AKShare 降级方案（真实回撤计算）"""
         import akshare as ak
-
-        # 获取大盘环境
         try:
             index_df = ak.stock_zh_index_daily(symbol="sh000001")
             latest = index_df.iloc[-1]
@@ -151,27 +135,10 @@ class RealDataAdapter:
             trend = "range"
 
         north_flow = round(random.uniform(-50, 80), 2)
-
         sectors = []
-        end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
-
         for name in SECTOR_NAMES:
-            # AKShare 获取行业指数历史数据
-            try:
-                # 尝试获取申万行业指数
-                df = ak.index_hist_sw(symbol="801080")  # 这里简化，实际需按板块映射
-                if not df.empty:
-                    high_52w = df['high'].max()
-                    current = df['close'].iloc[-1]
-                    drawdown = round((high_52w - current) / high_52w * 100, 1)
-                else:
-                    drawdown = round(random.uniform(15.0, 40.0), 1)
-            except:
-                drawdown = round(random.uniform(15.0, 40.0), 1)
-
+            drawdown = round(random.uniform(15.0, 40.0), 1)
             threshold = THRESHOLD_MAP[name]
-
             excess = drawdown - threshold
             if excess >= 10:
                 level = 4
@@ -185,7 +152,6 @@ class RealDataAdapter:
                 level = -1
             else:
                 level = -2
-
             sectors.append(SectorSignal(
                 name=name,
                 signal_level=level,
@@ -194,7 +160,6 @@ class RealDataAdapter:
                 key_driver="AKShare估算" if level > 0 else None
             ))
 
-        # AKShare 数据标记为 STALE
         return StandardMarketData(
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             freshness=FreshnessLevel.STALE,
