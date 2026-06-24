@@ -10,12 +10,23 @@ from output_layer.push_notifier import PushNotifier
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--phase', choices=['pre', 'intraday', 'post'], default='pre')
-    parser.add_argument('--mock', action='store_true')
+    parser.add_argument('--phase', 
+                        choices=['pre', 'intraday_a', 'intraday_b', 'post', 'night'],
+                        default='pre',
+                        help='分析阶段')
+    parser.add_argument('--mock', action='store_true', help='使用模拟数据')
     args = parser.parse_args()
 
+    phase_names = {
+        "pre": "盘前预测",
+        "intraday_a": "盘中A",
+        "intraday_b": "盘中B",
+        "post": "盘后复盘",
+        "night": "夜间预测"
+    }
+
     print("=" * 50)
-    print(f"🚀 V系统完整闭环启动 ({args.phase}阶段)")
+    print(f"🚀 V系统完整闭环启动 ({phase_names.get(args.phase, args.phase)})")
     print("=" * 50)
 
     print("\n📊 步骤1：获取数据...")
@@ -24,14 +35,14 @@ def main():
         adapter = MockDataAdapter()
     else:
         print("   使用真实数据（Tushare/AKShare）")
-        adapter = RealDataAdapter()
+        adapter = RealDataAdapter(phase=args.phase)   # 传递阶段
     market_data = adapter.fetch_all()
     print(f"   ✅ 数据源: {getattr(adapter, 'data_source', 'Mock')}")
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
 
     print("\n🧠 步骤2：核心逻辑分析...")
-    sm = VSystemStateMachine()
+    sm = VSystemStateMachine(phase=args.phase)        # 传递阶段
     result = sm.run(market_data)
     print(f"   ✅ 分析完成，信任度: {result.trust_score:.2f}, 判断: {result.judge_status}")
 
