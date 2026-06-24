@@ -48,7 +48,7 @@ class MockDataAdapter:
         # 返回标准化的数据，标记为"新鲜"
         return StandardMarketData(
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            freshness=FreshnessLevel.STALE,  # 注意：这里永远给新鲜，后续测试"陈旧"我们再改
+            freshness=FreshnessLevel.FRESH,  # 注意：这里永远给新鲜，后续测试"陈旧"我们再改
             sectors=sectors,
             index_trend=random.choice(["bull", "bear", "range"]),
             north_flow=round(random.uniform(-50, 80), 2)
