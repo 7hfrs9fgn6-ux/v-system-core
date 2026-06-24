@@ -33,7 +33,5 @@ class SignalResult(BaseModel):
     signals: List[SectorSignal]
     warnings: List[str]
     phase: str = ""
-    # ✅ 新增：消息面烈度评分结果
     sentiment: Optional[Dict[str, Any]] = None
-    # ✅ 新增：影子系统结果
     shadow: Optional[Dict[str, Any]] = None
