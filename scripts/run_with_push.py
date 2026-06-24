@@ -1,5 +1,3 @@
-# 完整闭环脚本（支持 pre / intraday / post 三个阶段）
-
 import sys
 import os
 import argparse
@@ -13,14 +11,13 @@ from output_layer.push_notifier import PushNotifier
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--phase', choices=['pre', 'intraday', 'post'], default='pre')
-    parser.add_argument('--mock', action='store_true', help='使用模拟数据（测试用）')
+    parser.add_argument('--mock', action='store_true')
     args = parser.parse_args()
 
     print("=" * 50)
     print(f"🚀 V系统完整闭环启动 ({args.phase}阶段)")
     print("=" * 50)
 
-    # 1. 数据适配层
     print("\n📊 步骤1：获取数据...")
     if args.mock:
         print("   使用模拟数据（测试模式）")
@@ -28,19 +25,16 @@ def main():
     else:
         print("   使用真实数据（Tushare/AKShare）")
         adapter = RealDataAdapter()
-
     market_data = adapter.fetch_all()
     print(f"   ✅ 数据源: {getattr(adapter, 'data_source', 'Mock')}")
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
 
-    # 2. 核心逻辑层
     print("\n🧠 步骤2：核心逻辑分析...")
     sm = VSystemStateMachine()
     result = sm.run(market_data)
     print(f"   ✅ 分析完成，信任度: {result.trust_score:.2f}, 判断: {result.judge_status}")
 
-    # 3. 输出层（微信推送）
     print("\n📲 步骤3：推送结果...")
     notifier = PushNotifier()
     success = notifier.send(result, args.phase)
