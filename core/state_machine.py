@@ -44,12 +44,12 @@ class VSystemStateMachine:
         drift_flag = False
         agent_mode = "AI分析"
 
-        # 1. 根据阶段调整信任度
+        # 阶段信任度调整
         phase_config = self.config.get("phases", {}).get(self.phase, {})
         trust_adjustment = phase_config.get("trust_adjustment", 1.0)
         trust_score = trust_score * trust_adjustment
 
-        # 2. 新鲜度封顶
+        # 新鲜度封顶
         trust_cfg = self.config["trust"]
         if market_data.freshness == FreshnessLevel.FRESH:
             pass
@@ -59,10 +59,10 @@ class VSystemStateMachine:
             agent_mode = "规则分析"
         elif market_data.freshness == FreshnessLevel.EXPIRED:
             trust_score = min(trust_score, trust_cfg["expired_threshold"])
-            warnings.append(f"⚠️ 数据源已过期，信任度已封顶至{trust_cfg['expired_threshold']}")
+            warnings.append(f"⚠️ 数据已过期，信任度封顶至{trust_cfg['expired_threshold']}")
             agent_mode = "AI已暂停"
 
-        # 3. 判断状态
+        # 判断状态
         if trust_score >= trust_cfg["fresh_threshold"]:
             judge_status = "正常"
         elif trust_score >= trust_cfg["stale_threshold"]:
@@ -70,7 +70,7 @@ class VSystemStateMachine:
         else:
             judge_status = "需谨慎"
 
-        # 4. 综合建议
+        # 综合建议
         avg_signal = sum(s.signal_level for s in market_data.sectors) / len(market_data.sectors)
         if avg_signal > 0.5:
             overall_suggestion = "偏多"
@@ -79,7 +79,7 @@ class VSystemStateMachine:
         else:
             overall_suggestion = "震荡"
 
-        # 5. 健康度
+        # 健康度
         health_cfg = self.config["health"]
         health_score = health_cfg["base_score"]
         if len(warnings) > 0:
@@ -93,7 +93,6 @@ class VSystemStateMachine:
             "post": "盘后复盘",
             "night": "夜间预测"
         }
-        phase_note = phase_names.get(self.phase, self.phase)
 
         return SignalResult(
             version="V1.1.55",
@@ -106,5 +105,5 @@ class VSystemStateMachine:
             drift_flag=drift_flag,
             signals=market_data.sectors,
             warnings=warnings,
-            phase=phase_note
+            phase=phase_names.get(self.phase, self.phase)
         )
