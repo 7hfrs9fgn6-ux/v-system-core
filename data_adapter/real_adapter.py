@@ -1,4 +1,3 @@
-# 真实数据适配器 - Tushare优先，AKShare降级
 import os
 import random
 from datetime import datetime, timedelta
@@ -16,7 +15,6 @@ THRESHOLD_MAP = {
     "银行": 20.0, "非银金融": 20.0, "公用事业": 15.0, "煤炭": 20.0, "石油石化": 20.0
 }
 
-# 申万一级行业指数代码（Tushare）
 SECTOR_CODE_MAP = {
     "电子": "801080.SI",
     "计算机": "801750.SI",
@@ -36,7 +34,8 @@ SECTOR_CODE_MAP = {
 }
 
 class RealDataAdapter:
-    def __init__(self):
+    def __init__(self, phase: str = "pre"):
+        self.phase = phase
         self.tushare_token = os.environ.get("TUSHARE_TOKEN")
         self.use_tushare = self.tushare_token and self.tushare_token != "dummy"
         self.data_source = "Tushare" if self.use_tushare else "AKShare"
@@ -52,14 +51,37 @@ class RealDataAdapter:
             print("ℹ️  未配置 Tushare Token，使用 AKShare（免费）")
             return self._fetch_from_akshare()
 
+    def _get_target_date(self):
+        """根据阶段返回需要获取数据的日期（回退天数）"""
+        phase_days_back = {
+            "pre": 1,           # 盘前用前一天数据
+            "intraday_a": 0,
+            "intraday_b": 0,
+            "post": 0,
+            "night": 0,
+        }
+        days_back = phase_days_back.get(self.phase, 0)
+        target_date = datetime.now() - timedelta(days=days_back)
+        # 如果是周末，再往前推
+        while target_date.weekday() >= 5:  # 5=周六, 6=周日
+            target_date -= timedelta(days=1)
+        return target_date
+
     def _fetch_from_tushare(self):
         import tushare as ts
         ts.set_token(self.tushare_token)
         pro = ts.pro_api()
-        today = datetime.now().strftime("%Y%m%d")
+
+        target_date = self._get_target_date()
+        date_str = target_date.strftime("%Y%m%d")
+        today_str = datetime.now().strftime("%Y%m%d")
 
         # 大盘环境
-        index_df = pro.index_daily(ts_code="000001.SH", start_date=today, end_date=today)
+        index_df = pro.index_daily(ts_code="000001.SH", start_date=date_str, end_date=date_str)
+        if index_df.empty:
+            # 如果当天没数据，尝试前一日
+            prev_date = (target_date - timedelta(days=1)).strftime("%Y%m%d")
+            index_df = pro.index_daily(ts_code="000001.SH", start_date=prev_date, end_date=prev_date)
         if index_df.empty:
             raise ValueError("Tushare 返回空")
         pct_change = index_df['pct_chg'].iloc[0]
@@ -67,14 +89,14 @@ class RealDataAdapter:
 
         # 北向资金
         try:
-            north_df = pro.moneyflow_hsgt(start_date=today, end_date=today)
+            north_df = pro.moneyflow_hsgt(start_date=date_str, end_date=date_str)
             north_flow = round(north_df['net_inflow'].iloc[0] / 10000, 2) if not north_df.empty else 0
         except:
             north_flow = round(random.uniform(-50, 80), 2)
 
         # 各板块52周回撤
         sectors = []
-        end_date = datetime.now().strftime("%Y%m%d")
+        end_date = today_str
         start_date = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
 
         for name in SECTOR_NAMES:
@@ -116,9 +138,15 @@ class RealDataAdapter:
                 key_driver="52周回撤" if level > 0 else None
             ))
 
+        # 根据阶段设置新鲜度
+        if self.phase in ["pre", "night"]:
+            freshness = FreshnessLevel.STALE
+        else:
+            freshness = FreshnessLevel.FRESH
+
         return StandardMarketData(
-            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            freshness=FreshnessLevel.FRESH,
+            timestamp=target_date.strftime("%Y-%m-%d %H:%M:%S"),
+            freshness=freshness,
             sectors=sectors,
             index_trend=trend,
             north_flow=north_flow
@@ -126,6 +154,9 @@ class RealDataAdapter:
 
     def _fetch_from_akshare(self):
         import akshare as ak
+        target_date = self._get_target_date()
+        date_str = target_date.strftime("%Y%m%d")
+
         try:
             index_df = ak.stock_zh_index_daily(symbol="sh000001")
             latest = index_df.iloc[-1]
@@ -160,9 +191,12 @@ class RealDataAdapter:
                 key_driver="AKShare估算" if level > 0 else None
             ))
 
+        # AKShare数据标记为STALE
+        freshness = FreshnessLevel.STALE
+
         return StandardMarketData(
-            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            freshness=FreshnessLevel.STALE,
+            timestamp=target_date.strftime("%Y-%m-%d %H:%M:%S"),
+            freshness=freshness,
             sectors=sectors,
             index_trend=trend,
             north_flow=north_flow
