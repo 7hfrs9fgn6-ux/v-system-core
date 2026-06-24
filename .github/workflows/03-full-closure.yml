@@ -1,0 +1,39 @@
+name: 03-Full-Closure (每日自动推送)
+
+on:
+  workflow_dispatch:                # 手动触发（测试用）
+  schedule:
+    - cron: '30 01 * * 1-5'        # 北京时间 09:30（工作日）
+
+env:
+  TZ: Asia/Shanghai
+  PYTHON_VERSION: '3.11'
+  PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+  TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+
+jobs:
+  daily-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: ① 检出代码
+        uses: actions/checkout@v4
+
+      - name: ② 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: ③ 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: ④ 时区校验
+        run: |
+          if [ "$(date +%Z)" != "CST" ]; then exit 1; fi
+          echo "✅ 时区正确 (CST)"
+
+      - name: ⑤ 执行完整闭环 (盘前阶段)
+        run: |
+          python scripts/run_with_push.py --phase pre
