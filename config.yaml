@@ -1,19 +1,16 @@
-# V系统策略配置文件
-# 修改这里可以调整系统行为，无需改动代码
-
+# V系统策略配置
 trust:
-  # 信任度阈值
-  fresh_threshold: 0.70      # >= 此值 → "判断正常"
-  stale_threshold: 0.50      # 0.50~0.70 → "判断偏低"
-  expired_threshold: 0.30    # < 0.50 → "需谨慎"
-  default_trust: 0.76        # 系统初始信任度
-  penalty_rate: 0.90         # 安全违规时信任度乘以的系数
+  fresh_threshold: 0.70
+  stale_threshold: 0.50
+  expired_threshold: 0.30
+  default_trust: 0.76
+  penalty_rate: 0.90
 
 health:
-  base_score: 85             # 健康度基础分
-  warning_penalty: 10        # 每条告警扣分
+  base_score: 85
+  warning_penalty: 10
 
-# 持仓映射（也可以在这里配置）
+# 持仓映射（基金代码 → 板块）
 holdings:
   009777:
     name: "中欧阿尔法混合C"
