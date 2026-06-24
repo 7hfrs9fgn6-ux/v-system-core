@@ -1,7 +1,7 @@
-name: 03-Full-Closure (每日自动推送 - 双阶段)
+name: 03-Full-Closure (主执行工作流)
 
 on:
-  workflow_dispatch:                # 手动触发
+  workflow_dispatch:
     inputs:
       phase:
         description: '选择阶段'
@@ -12,11 +12,11 @@ on:
           - pre
           - intraday
           - post
-  schedule:
-    - cron: '30 01 * * 1-5'        # 北京时间 09:30（盘前）
-    - cron: '00 06 * * 1-5'        # 北京时间 14:00（盘中）
+  # schedule 已注释，由 Pipedream 触发
+  # schedule:
+  #   - cron: '30 01 * * 1-5'
+  #   - cron: '00 06 * * 1-5'
 
-# 并发锁：防止同时运行冲突
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -51,7 +51,7 @@ jobs:
           if [ "$(date +%Z)" != "CST" ]; then exit 1; fi
           echo "✅ 时区正确 (CST)"
 
-      - name: ⑤ 判断触发阶段
+      - name: ⑤ 获取阶段参数
         id: get_phase
         run: |
           if [ "${{ github.event_name }}" == "schedule" ]; then
