@@ -44,7 +44,6 @@ def main():
     # ========== 1. 数据获取 ==========
     print("\n📊 步骤1：获取数据...")
 
-    # ✅ 盘中阶段优先使用 AlphaFeed
     use_alphafeed = config.get('phases', {}).get(args.phase, {}).get('use_alphafeed', False)
 
     if args.mock:
@@ -74,35 +73,48 @@ def main():
     result = sm.run(market_data)
     print(f"   ✅ 分析完成，信任度: {result.trust_score:.2f}, 判断: {result.judge_status}")
 
-    # ========== 3. ✅ 消息面烈度评分 ==========
+    # ========== 3. 消息面烈度评分 ==========
     print("\n📰 步骤3：消息面烈度评分...")
     sentiment_config = config.get('sentiment', {})
+    sentiment_results = {}
     if sentiment_config.get('enabled', False):
-        sent_engine = SentimentEngine()
-        sector_names = [s.name for s in result.signals]
-        sentiment_results = sent_engine.batch_analyze(sector_names)
-
-        # 将烈度评分附加到 result（用于推送展示）
-        result.sentiment = sentiment_results
-        print(f"   ✅ 烈度评分完成，覆盖 {len(sentiment_results)} 个板块")
+        try:
+            sent_engine = SentimentEngine()
+            sector_names = [s.name for s in result.signals]
+            sentiment_results = sent_engine.batch_analyze(sector_names)
+            print(f"   ✅ 烈度评分完成，覆盖 {len(sentiment_results)} 个板块")
+            # 如果有数据源信息，打印
+            if sentiment_results:
+                sample_key = list(sentiment_results.keys())[0]
+                data_source = sentiment_results[sample_key].get('data_source', '未知')
+                print(f"   📌 数据源: {data_source}")
+        except Exception as e:
+            print(f"   ❌ 烈度评分异常: {e}")
+            sentiment_results = {}
     else:
-        result.sentiment = {}
         print("   ⏭️ 烈度评分未启用")
 
-    # ========== 4. ✅ 影子系统 ==========
+    # 赋值给 result（使用 setattr 或直接赋值，因为 SignalResult 已支持该字段）
+    result.sentiment = sentiment_results if sentiment_results else {}
+
+    # ========== 4. 影子系统 ==========
     print("\n👻 步骤4：影子系统运行...")
     shadow_config = config.get('shadow', {})
+    shadow_result = {}
     if shadow_config.get('enabled', False):
-        shadow_sys = ShadowSystem()
-        shadow_result = shadow_sys.run_variants({}, result.signals)
-        result.shadow = shadow_result
-
-        reliability = shadow_result.get('reliability', {})
-        print(f"   ✅ 影子系统完成，可靠度: {reliability.get('overall_reliability', 0):.2%}")
-        print(f"   📌 建议: {reliability.get('recommendation', '')}")
+        try:
+            shadow_sys = ShadowSystem()
+            shadow_result = shadow_sys.run_variants({}, result.signals)
+            reliability = shadow_result.get('reliability', {})
+            print(f"   ✅ 影子系统完成，可靠度: {reliability.get('overall_reliability', 0):.2%}")
+            print(f"   📌 建议: {reliability.get('recommendation', '')}")
+        except Exception as e:
+            print(f"   ❌ 影子系统异常: {e}")
+            shadow_result = {}
     else:
-        result.shadow = {}
         print("   ⏭️ 影子系统未启用")
+
+    result.shadow = shadow_result if shadow_result else {}
 
     # ========== 5. 推送 ==========
     print("\n📲 步骤5：推送结果并存储...")
