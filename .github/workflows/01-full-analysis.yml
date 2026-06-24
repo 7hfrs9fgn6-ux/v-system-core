@@ -1,0 +1,42 @@
+name: 01-Full-Analysis (模拟全链路)
+
+on:
+  workflow_dispatch:                # 手动点击运行
+
+env:
+  TZ: Asia/Shanghai
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  full-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: ① 检出代码
+        uses: actions/checkout@v4
+
+      - name: ② 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: ③ 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: ④ 时区校验
+        run: |
+          echo "当前时区: $(date +%Z)"
+          if [ "$(date +%Z)" != "CST" ]; then exit 1; fi
+          echo "✅ 时区正确 (CST)"
+
+      - name: ⑤ 执行全链路分析 (数据+逻辑+输出)
+        run: |
+          python scripts/run_analysis.py
+
+      - name: ⑥ 输出摘要
+        run: |
+          echo "### 📊 V系统模拟分析摘要" >> $GITHUB_STEP_SUMMARY
+          echo "时间: $(date '+%Y-%m-%d %H:%M:%S') (北京时间)" >> $GITHUB_STEP_SUMMARY
+          echo "状态: ✅ 全流程验证通过 (数据适配层→核心逻辑层→输出层)" >> $GITHUB_STEP_SUMMARY
