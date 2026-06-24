@@ -1,4 +1,4 @@
-name: 03-Full-Closure (主执行工作流)
+name: 03-Full-Closure (五阶段主执行工作流)
 
 on:
   workflow_dispatch:
@@ -10,12 +10,10 @@ on:
         type: choice
         options:
           - pre
-          - intraday
+          - intraday_a
+          - intraday_b
           - post
-  # schedule 已注释，由 Pipedream 触发
-  # schedule:
-  #   - cron: '30 01 * * 1-5'
-  #   - cron: '00 06 * * 1-5'
+          - night
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -54,15 +52,7 @@ jobs:
       - name: ⑤ 获取阶段参数
         id: get_phase
         run: |
-          if [ "${{ github.event_name }}" == "schedule" ]; then
-            HOUR=$(date +%H)
-            if [ $HOUR -eq 9 ]; then PHASE="pre"
-            elif [ $HOUR -eq 14 ]; then PHASE="intraday"
-            else PHASE="post"
-            fi
-          else
-            PHASE="${{ github.event.inputs.phase }}"
-          fi
+          PHASE="${{ github.event.inputs.phase }}"
           echo "phase=$PHASE" >> $GITHUB_OUTPUT
           echo "当前阶段: $PHASE"
 
