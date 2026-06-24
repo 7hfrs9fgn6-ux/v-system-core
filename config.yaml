@@ -14,22 +14,27 @@ health:
 phases:
   pre:
     name: "盘前预测"
+    data_days_back: 1
     trust_adjustment: 0.95
     emoji: "🌅"
   intraday_a:
     name: "盘中A"
+    data_days_back: 0
     trust_adjustment: 1.0
     emoji: "📈"
   intraday_b:
     name: "盘中B"
+    data_days_back: 0
     trust_adjustment: 1.0
     emoji: "📊"
   post:
     name: "盘后复盘"
+    data_days_back: 0
     trust_adjustment: 1.0
     emoji: "📋"
   night:
     name: "夜间预测"
+    data_days_back: 0
     trust_adjustment: 0.90
     emoji: "🌙"
 
@@ -53,3 +58,16 @@ holdings:
   012417:
     name: "招商国证生物医药C"
     sectors: ["医药生物"]
+
+# Notion 配置（用于存储 L3 附录）
+notion:
+  enabled: true                     # 设为 false 可禁用
+  token: ""                         # 留空则从环境变量 NOTION_TOKEN 读取
+  database_id: ""                   # 留空则从环境变量 NOTION_DATABASE_ID 读取
+
+# 黄金坑预警配置
+alert:
+  enabled: true
+  threshold_excess: 0               # 回撤 >= 阈值时触发（0表示刚达标即预警）
+  cooldown_hours: 24                # 同一板块 24 小时内只预警一次
+  push_title: "🔔 黄金坑触发预警"
