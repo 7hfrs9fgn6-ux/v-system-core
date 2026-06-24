@@ -2,7 +2,8 @@ import os
 import yaml
 import requests
 import time
-from datetime import datetime  # ✅ 修复：导入 datetime
+import hashlib
+from datetime import datetime
 from output_layer.signal_result import SignalResult
 from output_layer.ai_commentator import AICommentator
 
@@ -24,12 +25,30 @@ class PushNotifier:
         self._alert_cache = {}
         self._last_push_time = 0
         self._push_interval = 2
+        
+        # ✅ 新增：推送去重缓存
+        self._sent_cache = {}
+        self._cache_ttl = 3600  # 1小时内不重复推送相同内容
 
     def _load_config(self, path):
         if os.path.exists(path):
             with open(path, 'r') as f:
                 return yaml.safe_load(f)
         return {}
+
+    def _get_content_hash(self, content: str) -> str:
+        """生成内容哈希用于去重"""
+        return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+    def _is_duplicate(self, content: str) -> bool:
+        """检查是否重复推送"""
+        content_hash = self._get_content_hash(content)
+        if content_hash in self._sent_cache:
+            last_time = self._sent_cache[content_hash]
+            if (time.time() - last_time) < self._cache_ttl:
+                return True
+        self._sent_cache[content_hash] = time.time()
+        return False
 
     def _send_with_rate_limit(self, title, content):
         now = time.time()
@@ -49,8 +68,13 @@ class PushNotifier:
                 "content": content,
                 "template": "txt"
             }, timeout=10)
-            return resp.json().get("code") == 200
-        except:
+            if resp.json().get("code") == 200:
+                return True
+            else:
+                print(f"❌ 推送失败: {resp.json().get('msg')}")
+                return False
+        except Exception as e:
+            print(f"❌ 推送异常: {e}")
             return False
 
     def send(self, result: SignalResult, phase: str = "pre") -> bool:
@@ -61,49 +85,40 @@ class PushNotifier:
 
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         title = f"📊 V系统 {phase_info.get('emoji', '')} {phase_info.get('name', phase)}"
+        
+        # ✅ 获取完整推送内容（包含黄金坑预警）
         content = self._format_message(result, phase)
+        
+        # ✅ 去重检查：相同内容不重复发送
+        if self._is_duplicate(content):
+            print("⏭️ 重复推送已跳过（内容相同）")
+            # 仍然执行 Notion 存储（不丢失数据）
+            self._store_to_notion(result, phase)
+            return True
 
+        # 发送推送
         success = self._send_with_rate_limit(title, content)
         print("✅ 主推送成功" if success else "❌ 主推送失败")
-
-        # 黄金坑预警（仅 post 阶段）
+        
+        # ✅ 不再单独发送预警，已合并到主推送中
+        # 只更新预警缓存（用于冷却记录）
         if self.alert_enabled and phase == "post":
-            self._check_alerts_batch(result)
+            self._update_alert_cache(result)
 
+        # Notion存储
         self._store_to_notion(result, phase)
         return success
 
-    def _check_alerts_batch(self, result: SignalResult):
-        now = datetime.now()  # ✅ 现在 datetime 已导入
-        triggered = []
+    def _update_alert_cache(self, result: SignalResult):
+        """只更新预警缓存，不发送独立推送"""
+        now = datetime.now()
         for s in result.signals:
             if s.drawdown >= s.threshold:
                 key = s.name
                 last = self._alert_cache.get(key)
-                if last and (now - last).total_seconds() < self.alert_cooldown * 3600:
-                    continue
-                triggered.append(s)
-                self._alert_cache[key] = now
-
-        if not triggered:
-            return
-
-        lines = ["━━━━━━━━━━━━━━━━━━━━━━━━━━"]
-        lines.append("🔔 黄金坑触发预警（批量）")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append(f"触发数量：{len(triggered)} 个板块")
-        lines.append("")
-        lines.append("【触发板块列表】")
-        for s in triggered:
-            excess = s.drawdown - s.threshold
-            emoji = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠"
-            lines.append(f"  {emoji} {s.name}：回撤{s.drawdown}% / 阈值{s.threshold}% (超出{excess:.1f}%)")
-        lines.append("")
-        lines.append("📌 建议：关注以上板块，可考虑分批建仓")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-        self._send_with_rate_limit("🔔 黄金坑触发预警", "\n".join(lines))
-        print(f"🔔 黄金坑预警已发送（{len(triggered)}个板块）")
+                if not last or (now - last).total_seconds() >= self.alert_cooldown * 3600:
+                    self._alert_cache[key] = now
+                    print(f"🔔 黄金坑缓存已更新: {s.name} (回撤{s.drawdown}%)")
 
     def _store_to_notion(self, result: SignalResult, phase: str):
         try:
@@ -114,13 +129,14 @@ class PushNotifier:
             print(f"❌ Notion 存储失败: {e}")
 
     def _format_message(self, result: SignalResult, phase: str) -> str:
+        """格式化推送内容，将黄金坑预警合并到主推送中"""
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         phase_text = phase_info.get("name", phase)
         emoji = phase_info.get("emoji", "📊")
 
         signal_dict = {s.name: s for s in result.signals}
 
-        # 持仓信号
+        # ========== 1. 持仓信号 ==========
         holding_lines = []
         for fund_code, fund_info in self.holding_map.items():
             fund_name = fund_info["name"]
@@ -148,7 +164,7 @@ class PushNotifier:
                 f"  {emoji_s} {status} {fund_name}{driver} 回撤{best_dd}% / 阈值{best_th}%"
             )
 
-        # 最强/最弱（非持仓）
+        # ========== 2. 最强/最弱（非持仓） ==========
         non_holding = [s for s in result.signals if s.name not in self.holding_sectors]
         strongest = max(non_holding, key=lambda x: x.signal_level) if non_holding else None
         weakest = min(non_holding, key=lambda x: x.signal_level) if non_holding else None
@@ -157,8 +173,31 @@ class PushNotifier:
             em = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠" if s.signal_level >= -1 else "🔴"
             return f"{em} {s.name} (回撤{s.drawdown}% / 阈值{s.threshold}%)"
 
+        # ========== 3. ✅ 黄金坑预警（合并到主推送，不单独发送） ==========
+        alert_lines = []
+        if self.alert_enabled and phase == "post":
+            now = datetime.now()
+            triggered = []
+            for s in result.signals:
+                if s.drawdown >= s.threshold:
+                    key = s.name
+                    last = self._alert_cache.get(key)
+                    if not last or (now - last).total_seconds() >= self.alert_cooldown * 3600:
+                        triggered.append(s)
+            if triggered:
+                alert_lines.append("")
+                alert_lines.append("【🔔 黄金坑触发预警】")
+                alert_lines.append(f"  触发数量：{len(triggered)} 个板块")
+                for s in triggered:
+                    excess = s.drawdown - s.threshold
+                    em = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠"
+                    alert_lines.append(f"    {em} {s.name}：回撤{s.drawdown}% / 阈值{s.threshold}% (超出{excess:.1f}%)")
+                alert_lines.append("  📌 建议：关注以上板块，可考虑分批建仓")
+
+        # ========== 4. AI点评 ==========
         ai_comment = self.commentator.generate_comment(result, self.holding_sectors)
 
+        # ========== 5. 组装完整推送 ==========
         lines = []
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         lines.append(f"{emoji} V系统 {phase_text} [{result.analysis_time}]")
@@ -180,6 +219,11 @@ class PushNotifier:
             lines.append("")
             lines.append("【⚠️ 最弱信号（非持仓）】")
             lines.append(f"  {fmt(weakest)}")
+        
+        # ✅ 合并黄金坑预警到主推送
+        if alert_lines:
+            lines.extend(alert_lines)
+        
         lines.append("")
         lines.append("【🤖 AI 点评】")
         lines.append(f"  {ai_comment}")
@@ -196,4 +240,5 @@ class PushNotifier:
         else:
             advice = "⚠️ 不建议据此操作"
         lines.append(f"📌 操作指引：{advice}")
+        
         return "\n".join(lines)
