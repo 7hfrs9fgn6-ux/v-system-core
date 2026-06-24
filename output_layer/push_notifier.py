@@ -14,6 +14,7 @@ class PushNotifier:
         for fund in self.holding_map.values():
             self.holding_sectors.extend(fund.get("sectors", []))
         self.holding_sectors = list(set(self.holding_sectors))
+        self.phase_config = self.config.get("phases", {})
 
     def _load_config(self, path):
         if os.path.exists(path):
@@ -27,8 +28,8 @@ class PushNotifier:
             print(self._format_message(result, phase))
             return False
 
-        phase_map = {"pre": "盘前预判", "intraday": "盘中提醒", "post": "盘后复盘"}
-        title = f"📊 V系统{phase_map.get(phase, '分析')}"
+        phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
+        title = f"📊 V系统 {phase_info.get('emoji', '')} {phase_info.get('name', phase)}"
         content = self._format_message(result, phase)
         url = "http://www.pushplus.plus/send"
 
@@ -50,8 +51,9 @@ class PushNotifier:
             return False
 
     def _format_message(self, result: SignalResult, phase: str) -> str:
-        phase_map = {"pre": "盘前预判", "intraday": "盘中提醒", "post": "盘后复盘"}
-        phase_text = phase_map.get(phase, "分析")
+        phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
+        phase_text = phase_info.get("name", phase)
+        emoji = phase_info.get("emoji", "📊")
 
         signal_dict = {s.name: s for s in result.signals}
 
@@ -71,16 +73,16 @@ class PushNotifier:
             best = max(sector_signals, key=lambda x: x[1])
             best_sec, best_level, best_dd, best_th = best
             if best_level >= 3:
-                emoji, status = "🟢", "机会信号"
+                emoji_signal, status = "🟢", "机会信号"
             elif best_level >= 1:
-                emoji, status = "🟡", "观察中"
+                emoji_signal, status = "🟡", "观察中"
             elif best_level >= -1:
-                emoji, status = "🟠", "风险提示"
+                emoji_signal, status = "🟠", "风险提示"
             else:
-                emoji, status = "🔴", "风险信号"
+                emoji_signal, status = "🔴", "风险信号"
             driver = f"（{best_sec}驱动）" if len(sector_signals) > 1 else ""
             holding_lines.append(
-                f"  {emoji} {status} {fund_name}{driver} 回撤{best_dd}% / 阈值{best_th}%"
+                f"  {emoji_signal} {status} {fund_name}{driver} 回撤{best_dd}% / 阈值{best_th}%"
             )
 
         # 最强/最弱
@@ -89,14 +91,14 @@ class PushNotifier:
         weakest = min(non_holding, key=lambda x: x.signal_level) if non_holding else None
 
         def format_signal(s, prefix=""):
-            emoji = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠" if s.signal_level >= -1 else "🔴"
-            return f"{prefix}{emoji} {s.name} (回撤{s.drawdown}% / 阈值{s.threshold}%)"
+            emoji_signal = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠" if s.signal_level >= -1 else "🔴"
+            return f"{prefix}{emoji_signal} {s.name} (回撤{s.drawdown}% / 阈值{s.threshold}%)"
 
         ai_comment = self.commentator.generate_comment(result, self.holding_sectors)
 
         lines = []
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append(f"📊 V系统 {phase_text} [{result.analysis_time}]")
+        lines.append(f"{emoji} V系统 {phase_text} [{result.analysis_time}]")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         lines.append(f"【综合建议】{result.overall_suggestion}")
         lines.append(f"【判断状态】{result.judge_status}")
