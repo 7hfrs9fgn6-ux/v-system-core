@@ -12,9 +12,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--phase', 
                         choices=['pre', 'intraday_a', 'intraday_b', 'post', 'night'],
-                        default='pre',
-                        help='分析阶段')
-    parser.add_argument('--mock', action='store_true', help='使用模拟数据')
+                        default='pre')
+    parser.add_argument('--mock', action='store_true')
     args = parser.parse_args()
 
     phase_names = {
@@ -35,18 +34,18 @@ def main():
         adapter = MockDataAdapter()
     else:
         print("   使用真实数据（Tushare/AKShare）")
-        adapter = RealDataAdapter(phase=args.phase)   # 传递阶段
+        adapter = RealDataAdapter(phase=args.phase)
     market_data = adapter.fetch_all()
     print(f"   ✅ 数据源: {getattr(adapter, 'data_source', 'Mock')}")
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
 
     print("\n🧠 步骤2：核心逻辑分析...")
-    sm = VSystemStateMachine(phase=args.phase)        # 传递阶段
+    sm = VSystemStateMachine(phase=args.phase)
     result = sm.run(market_data)
     print(f"   ✅ 分析完成，信任度: {result.trust_score:.2f}, 判断: {result.judge_status}")
 
-    print("\n📲 步骤3：推送结果...")
+    print("\n📲 步骤3：推送结果并存储...")
     notifier = PushNotifier()
     success = notifier.send(result, args.phase)
 
