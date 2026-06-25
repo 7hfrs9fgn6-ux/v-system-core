@@ -4,3 +4,4 @@ pyyaml
 python-dateutil
 tushare
 akshare
+pandas
