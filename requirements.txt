@@ -5,3 +5,5 @@ python-dateutil
 tushare
 akshare
 pandas
+beautifulsoup4
+lxml
