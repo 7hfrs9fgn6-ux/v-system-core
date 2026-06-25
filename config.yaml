@@ -133,3 +133,12 @@ rate_limit:
 retry:
   max_attempts: 3
   delays: [0, 1, 3]
+
+# ============================================================
+# 智能代理配置（新增）
+# ============================================================
+agent:
+  enabled: false  # ⚠️ 默认关闭，设置为 true 启用
+  max_tool_calls: 5
+  max_reasoning_depth: 3
+  timeout: 15
