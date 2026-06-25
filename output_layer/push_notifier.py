@@ -27,6 +27,9 @@ class PushNotifier:
         self._push_interval = 2
         self._sent_cache = {}
         self._cache_ttl = 3600
+        # 存储大盘数据
+        self._index_close = 0
+        self._index_pct = 0
 
     def _load_config(self, path):
         if os.path.exists(path):
@@ -79,6 +82,11 @@ class PushNotifier:
             self._store_to_notion(result, phase)
             return False
 
+        # 从 result 中提取大盘数据（如果有）
+        if hasattr(result, '_index_data') and result._index_data:
+            self._index_close = result._index_data.get('close', 0)
+            self._index_pct = result._index_data.get('pct', 0)
+
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         title = f"📊 V系统 {phase_info.get('emoji', '')} {phase_info.get('name', phase)}"
 
@@ -117,199 +125,220 @@ class PushNotifier:
             print(f"❌ Notion 存储失败: {e}")
 
     def _format_message(self, result: SignalResult, phase: str) -> str:
-        """格式化推送内容，包含所有模块"""
+        """格式化推送内容 - 新手友好版"""
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         phase_text = phase_info.get("name", phase)
         emoji = phase_info.get("emoji", "📊")
 
         signal_dict = {s.name: s for s in result.signals}
 
-        # 1. 持仓信号
-        holding_lines = []
+        # 获取大盘数据（从 adapter 传递）
+        index_close = getattr(self, '_index_close', 0)
+        index_pct = getattr(self, '_index_pct', 0)
+
+        # ========== 1. 头部信息（含大盘） ==========
+        lines = []
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        lines.append(f"{emoji} V系统 {phase_text}")
+        lines.append(f"📅 {result.analysis_time[:16]}")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+        # ✅ 大盘指数（新增）
+        if index_close > 0:
+            arrow = "📈" if index_pct > 0 else "📉" if index_pct < 0 else "➡️"
+            lines.append(f"【📊 上证指数】{index_close:.2f}  {arrow} {index_pct:+.2f}%")
+            if abs(index_pct) < 0.5:
+                lines.append("   └─ 震荡行情，方向不明")
+            elif index_pct > 1:
+                lines.append("   └─ 强势上涨，市场偏暖")
+            elif index_pct < -1:
+                lines.append("   └─ 明显回调，注意风险")
+            else:
+                lines.append("   └─ 小幅波动，正常整理")
+
+        # ========== 2. 核心建议（通俗解读） ==========
+        lines.append("")
+        lines.append("【💡 今日核心建议】")
+
+        # ✅ 综合建议解读
+        suggestion = result.overall_suggestion
+        if suggestion == "偏多":
+            lines.append(f"   📌 方向判断：看好后市（偏多）")
+            lines.append(f"   💬 解读：系统认为市场整体向上概率较大")
+        elif suggestion == "偏空":
+            lines.append(f"   📌 方向判断：看淡后市（偏空）")
+            lines.append(f"   💬 解读：系统认为市场整体向下概率较大")
+        else:
+            lines.append(f"   📌 方向判断：震荡整理")
+            lines.append(f"   💬 解读：系统认为市场方向不明，建议观望")
+
+        # ✅ 判断状态解读（通俗易懂）
+        judge = result.judge_status
+        trust = result.trust_score
+        if judge == "正常":
+            lines.append(f"   📊 可信度：🟢 可信（信任度 {trust:.2f}）")
+            lines.append(f"   💬 解读：数据质量好，建议可参考")
+        elif judge == "偏低":
+            lines.append(f"   📊 可信度：🟡 偏低（信任度 {trust:.2f}）")
+            lines.append(f"   💬 解读：数据可能有延迟，建议结合其他信息确认")
+        else:
+            lines.append(f"   📊 可信度：🟠 需谨慎（信任度 {trust:.2f}）")
+            lines.append(f"   💬 解读：数据质量不佳，不建议据此操作")
+
+        # ✅ 运行模式解读
+        mode = result.agent_mode
+        if mode == "AI分析":
+            lines.append(f"   🤖 模式：AI智能分析（推荐）")
+        elif mode == "规则分析":
+            lines.append(f"   ⚙️  模式：规则分析（数据不足，AI暂未启用）")
+        else:
+            lines.append(f"   ⚠️  模式：AI已暂停（系统保守运行）")
+
+        # ========== 3. 持仓信号（去重） ==========
+        lines.append("")
+        lines.append("【📌 你的持仓信号】")
+
+        # ✅ 去重：同一板块只显示一次，取最高信号
+        seen_sectors = set()
+        unique_holdings = []
         for fund_code, fund_info in self.holding_map.items():
             fund_name = fund_info["name"]
             sectors = fund_info["sectors"]
-            sector_signals = []
             for sec in sectors:
+                if sec in seen_sectors:
+                    continue
+                seen_sectors.add(sec)
                 if sec in signal_dict:
                     s = signal_dict[sec]
-                    sector_signals.append((sec, s.signal_level, s.drawdown, s.threshold))
-            if not sector_signals:
-                holding_lines.append(f"  ⚪ {fund_name}：无数据")
-                continue
-            best = max(sector_signals, key=lambda x: x[1])
-            best_sec, best_level, best_dd, best_th = best
-            if best_level >= 3:
-                emoji_s, status = "🟢", "机会信号"
-            elif best_level >= 1:
-                emoji_s, status = "🟡", "观察中"
-            elif best_level >= -1:
-                emoji_s, status = "🟠", "风险提示"
-            else:
-                emoji_s, status = "🔴", "风险信号"
-            driver = f"（{best_sec}驱动）" if len(sector_signals) > 1 else ""
-            holding_lines.append(
-                f"  {emoji_s} {status} {fund_name}{driver} 回撤{best_dd}% / 阈值{best_th}%"
-            )
+                    emoji_s = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠" if s.signal_level >= -1 else "🔴"
+                    status = "机会信号" if s.signal_level >= 3 else "观察中" if s.signal_level >= 1 else "风险提示" if s.signal_level >= -1 else "风险信号"
+                    # 找出包含该板块的基金
+                    funds_with_sector = [f["name"] for f in self.holding_map.values() if sec in f["sectors"]]
+                    fund_label = f"（{','.join(funds_with_sector)}）"
+                    unique_holdings.append({
+                        "sector": sec,
+                        "level": s.signal_level,
+                        "drawdown": s.drawdown,
+                        "threshold": s.threshold,
+                        "emoji": emoji_s,
+                        "status": status,
+                        "funds": fund_label,
+                        "signal": s
+                    })
 
-        # 2. 最强/最弱
+        # 按信号强度排序（从强到弱）
+        unique_holdings.sort(key=lambda x: x["level"], reverse=True)
+
+        if unique_holdings:
+            for h in unique_holdings:
+                lines.append(f"  {h['emoji']} {h['status']} {h['sector']} {h['funds']}")
+                lines.append(f"     └─ 回撤 {h['drawdown']}% / 阈值 {h['threshold']}%")
+        else:
+            lines.append("  （暂无持仓信号数据）")
+
+        # ========== 4. 最强/最弱信号 ==========
         non_holding = [s for s in result.signals if s.name not in self.holding_sectors]
         strongest = max(non_holding, key=lambda x: x.signal_level) if non_holding else None
         weakest = min(non_holding, key=lambda x: x.signal_level) if non_holding else None
 
-        def fmt(s):
-            em = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠" if s.signal_level >= -1 else "🔴"
-            return f"{em} {s.name} (回撤{s.drawdown}% / 阈值{s.threshold}%)"
+        if strongest:
+            em = "🟢" if strongest.signal_level >= 3 else "🟡" if strongest.signal_level >= 1 else "🟠"
+            lines.append("")
+            lines.append(f"【🔥 市场最强信号】{em} {strongest.name}")
+            lines.append(f"     └─ 回撤 {strongest.drawdown}% / 阈值 {strongest.threshold}%")
+            if strongest.drawdown >= strongest.threshold + 10:
+                lines.append("     └─ ⚠️ 深度超跌，可能出现反弹机会")
 
-        # 3. 烈度评分
-        sentiment_lines = []
+        if weakest:
+            em = "🟠" if weakest.signal_level >= -1 else "🔴"
+            lines.append("")
+            lines.append(f"【⚠️ 市场最弱信号】{em} {weakest.name}")
+            lines.append(f"     └─ 回撤 {weakest.drawdown}% / 阈值 {weakest.threshold}%")
+            if weakest.drawdown < weakest.threshold - 10:
+                lines.append("     └─ 📈 相对强势，暂不适合抄底")
+
+        # ========== 5. 烈度评分（简化，只显示持仓板块） ==========
         if hasattr(result, 'sentiment') and result.sentiment:
-            sentiment_lines.append("【📰 消息面烈度评分】")
-            for fund_code, fund_info in self.holding_map.items():
-                for sec in fund_info.get('sectors', []):
-                    if sec in result.sentiment:
-                        s = result.sentiment[sec]
-                        intensity = s.get('intensity_score', 0)
-                        emotion = s.get('emotion_label', '中性')
-                        bar = "█" * int(intensity) + "░" * (10 - int(intensity))
-                        sentiment_lines.append(f"    {sec}: {bar} {intensity}/10 ({emotion})")
-                        break
-            sources = set()
-            for v in result.sentiment.values():
-                if '数据源' in v:
-                    sources.add(v['数据源'])
-            sentiment_lines.append(f"    数据源: {', '.join(sources) if sources else '未知'}")
+            lines.append("")
+            lines.append("【📰 消息面烈度评分】")
+            for sec in self.holding_sectors:
+                if sec in result.sentiment:
+                    s = result.sentiment[sec]
+                    intensity = s.get('intensity_score', 0)
+                    emotion = s.get('emotion_label', '中性')
+                    bar = "█" * int(intensity) + "░" * (10 - int(intensity))
+                    lines.append(f"  {sec}: {bar} {intensity}/10 ({emotion})")
+                    if intensity >= 7:
+                        lines.append(f"     └─ 🔥 消息面高度活跃，关注度较高")
+                    elif intensity <= 3:
+                        lines.append(f"     └─ 💤 消息面平淡，暂无明显催化剂")
 
-        # 4. 影子系统
-        shadow_lines = []
+        # ========== 6. 影子系统 ==========
         if hasattr(result, 'shadow') and result.shadow:
-            shadow_lines.append("【👻 影子系统】")
             reliability = result.shadow.get('reliability', {})
-            shadow_lines.append(f"    可靠度: {reliability.get('overall_reliability', 0):.2%}")
-            shadow_lines.append(f"    共识: {reliability.get('consensus_level', '未知')}")
-            shadow_lines.append(f"    📌 {reliability.get('recommendation', '')}")
+            lines.append("")
+            lines.append("【👻 影子系统验证】")
+            lines.append(f"  可靠度: {reliability.get('overall_reliability', 0):.2%}")
+            if reliability.get('overall_reliability', 0) >= 0.7:
+                lines.append("  ✅ 各策略基本一致，信号可信度高")
+            else:
+                lines.append("  ⚠️ 各策略存在分歧，建议保守操作")
 
-        # 5. 相对强度
-        relative_lines = []
-        if hasattr(result, 'relative_strength') and result.relative_strength:
-            relative_lines.append("【📊 相对强度】")
-            for fund_code, fund_info in self.holding_map.items():
-                for sec in fund_info.get('sectors', []):
-                    if sec in result.relative_strength:
-                        rs = result.relative_strength[sec]
-                        ratio = rs.get('strength_ratio', 1.0)
-                        interp = rs.get('interpretation', '中性')
-                        emoji_r = "🟢" if interp == "强势" else "🟡" if interp == "中性" else "🔴"
-                        relative_lines.append(f"    {sec}: {emoji_r} {ratio:.2f} ({interp})")
-                        break
-
-        # 6. AI点评
+        # ========== 7. AI点评 ==========
         ai_comment = self.commentator.generate_comment(result, self.holding_sectors)
+        if ai_comment:
+            lines.append("")
+            lines.append("【🤖 AI 点评】")
+            lines.append(f"  {ai_comment}")
 
-        # 7. 智能代理分析（新增）
-        agent_lines = []
+        # ========== 8. 智能代理分析（精简） ==========
         if hasattr(result, 'agent_analysis') and result.agent_analysis:
             agent_data = result.agent_analysis
-            agent_lines.append("【🧠 智能代理分析】")
             response = agent_data.get('response', '')
             if response:
-                if len(response) > 300:
-                    response = response[:300] + "..."
-                agent_lines.append(f"  {response}")
-            else:
-                tool_calls = agent_data.get('tool_calls_made', 0)
-                if tool_calls > 0:
-                    agent_lines.append(f"  工具调用: {tool_calls} 次")
-                else:
-                    agent_lines.append("  分析完成，无额外工具调用")
-            mode = agent_data.get('mode', '')
-            if mode == 'agent_terminated':
-                agent_lines.append("  ⚠️ 达到最大推理次数")
-            elif mode == 'fallback':
-                agent_lines.append("  ⚠️ 使用降级模式")
+                # 只取前200字
+                if len(response) > 200:
+                    response = response[:200] + "..."
+                lines.append("")
+                lines.append("【🧠 智能代理分析】")
+                for line in response.split('\n')[:5]:
+                    if line.strip():
+                        lines.append(f"  {line.strip()}")
 
-        # 8. 黄金坑预警
-        alert_lines = []
-        if self.alert_enabled and phase == "post":
-            now = datetime.now()
-            triggered = []
-            for s in result.signals:
-                if s.drawdown >= s.threshold:
-                    key = s.name
-                    last = self._alert_cache.get(key)
-                    if not last or (now - last).total_seconds() >= self.alert_cooldown * 3600:
-                        triggered.append(s)
-            if triggered:
-                alert_lines.append("【🔔 黄金坑触发预警】")
-                alert_lines.append(f"  触发数量：{len(triggered)} 个板块")
-                for s in triggered:
-                    excess = s.drawdown - s.threshold
-                    em = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠"
-                    alert_lines.append(f"    {em} {s.name}：回撤{s.drawdown}% / 阈值{s.threshold}% (超出{excess:.1f}%)")
-                alert_lines.append("  📌 建议：关注以上板块，可考虑分批建仓")
-
-        # 9. 组装
-        lines = []
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append(f"{emoji} V系统 {phase_text} [{result.analysis_time}]")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append(f"【综合建议】{result.overall_suggestion}")
-        lines.append(f"【判断状态】{result.judge_status}")
-        lines.append(f"【运行模式】{result.agent_mode}")
+        # ========== 9. 操作指引（具体化） ==========
         lines.append("")
-
-        lines.append("【📌 你的持仓信号】")
-        if holding_lines:
-            lines.extend(holding_lines)
-        else:
-            lines.append("  （无持仓数据）")
-
-        if strongest:
-            lines.append("")
-            lines.append("【🔥 最强信号（非持仓）】")
-            lines.append(f"  {fmt(strongest)}")
-        if weakest:
-            lines.append("")
-            lines.append("【⚠️ 最弱信号（非持仓）】")
-            lines.append(f"  {fmt(weakest)}")
-
-        if sentiment_lines:
-            lines.append("")
-            lines.extend(sentiment_lines)
-
-        if shadow_lines:
-            lines.append("")
-            lines.extend(shadow_lines)
-
-        if relative_lines:
-            lines.append("")
-            lines.extend(relative_lines)
-
-        if alert_lines:
-            lines.append("")
-            lines.extend(alert_lines)
-
-        lines.append("")
-        lines.append("【🤖 AI 点评】")
-        lines.append(f"  {ai_comment}")
-        lines.append("")
-
-        if agent_lines:
-            lines.extend(agent_lines)
-            lines.append("")
-
-        if result.warnings:
-            lines.append(f"⚠️ 告警: {', '.join(result.warnings)}")
-        else:
-            lines.append("✅ 无异常告警")
-
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("【📌 操作建议】")
+
+        # 根据判断状态给出具体建议
         if result.judge_status == "正常":
-            advice = "建议正常参考信号决策"
+            lines.append("  ✅ 系统判断可信，可参考信号做决策")
+            lines.append("  📍 关注持仓中信号最强的板块")
         elif result.judge_status == "偏低":
-            advice = "建议结合其他信息确认"
+            lines.append("  🟡 系统判断参考价值有限")
+            lines.append("  📍 建议：查看其他信息源（财经新闻、研报）后综合判断")
+            lines.append("  ⚠️ 暂不建议仅据此操作")
         else:
-            advice = "⚠️ 不建议据此操作"
-        lines.append(f"📌 操作指引：{advice}")
+            lines.append("  🔴 系统判断不可靠，建议暂停决策")
+            lines.append("  📍 等待下一时段数据更新后再做判断")
+
+        # 告警信息（通俗解释）
+        if result.warnings:
+            lines.append("")
+            lines.append("【⚠️ 系统提示】")
+            for w in result.warnings:
+                # 翻译告警信息
+                if "STALE" in w:
+                    lines.append("  ⏰ 数据可能有延迟（使用前一日数据）")
+                elif "封顶" in w:
+                    lines.append("  📊 因数据延迟，系统自动降低了可信度")
+                elif "计划漂移" in w:
+                    lines.append("  🔄 系统检测到分析方向略有偏离，已自动修正")
+                elif "健康度" in w:
+                    lines.append("  🩺 系统部分功能存在异常，建议谨慎")
+                else:
+                    lines.append(f"  ⚠️ {w}")
+
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         return "\n".join(lines)
