@@ -1,3 +1,121 @@
+import os
+import yaml
+import requests
+import time
+import hashlib
+from datetime import datetime
+from output_layer.signal_result import SignalResult
+from output_layer.ai_commentator import AICommentator
+
+
+class PushNotifier:
+    def __init__(self, config_path="config.yaml"):
+        self.token = os.environ.get("PUSHPLUS_TOKEN")
+        self.commentator = AICommentator()
+        self.config = self._load_config(config_path)
+        self.holding_map = self.config.get("holdings", {})
+        self.holding_sectors = []
+        for fund in self.holding_map.values():
+            self.holding_sectors.extend(fund.get("sectors", []))
+        self.holding_sectors = list(set(self.holding_sectors))
+        self.phase_config = self.config.get("phases", {})
+        self.alert_config = self.config.get("alert", {})
+        self.alert_enabled = self.alert_config.get("enabled", False)
+        self.alert_cooldown = self.alert_config.get("cooldown_hours", 24)
+        self._alert_cache = {}
+        self._last_push_time = 0
+        self._push_interval = 2
+        self._sent_cache = {}
+        self._cache_ttl = 3600
+
+    def _load_config(self, path):
+        if os.path.exists(path):
+            with open(path, 'r') as f:
+                return yaml.safe_load(f)
+        return {}
+
+    def _get_content_hash(self, content: str) -> str:
+        return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+    def _is_duplicate(self, content: str) -> bool:
+        content_hash = self._get_content_hash(content)
+        if content_hash in self._sent_cache:
+            last_time = self._sent_cache[content_hash]
+            if (time.time() - last_time) < self._cache_ttl:
+                return True
+        self._sent_cache[content_hash] = time.time()
+        return False
+
+    def _send_with_rate_limit(self, title, content):
+        now = time.time()
+        wait_time = self._push_interval - (now - self._last_push_time)
+        if wait_time > 0:
+            time.sleep(wait_time)
+        self._last_push_time = time.time()
+        return self._send_push(title, content)
+
+    def _send_push(self, title, content):
+        if not self.token:
+            return False
+        try:
+            resp = requests.post("http://www.pushplus.plus/send", json={
+                "token": self.token,
+                "title": title,
+                "content": content,
+                "template": "txt"
+            }, timeout=10)
+            if resp.json().get("code") == 200:
+                return True
+            else:
+                print(f"❌ 推送失败: {resp.json().get('msg')}")
+                return False
+        except Exception as e:
+            print(f"❌ 推送异常: {e}")
+            return False
+
+    def send(self, result: SignalResult, phase: str = "pre") -> bool:
+        if not self.token:
+            print("📢 [模拟] 无Token")
+            self._store_to_notion(result, phase)
+            return False
+
+        phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
+        title = f"📊 V系统 {phase_info.get('emoji', '')} {phase_info.get('name', phase)}"
+
+        content = self._format_message(result, phase)
+
+        if self._is_duplicate(content):
+            print("⏭️ 重复推送已跳过（内容相同）")
+            self._store_to_notion(result, phase)
+            return True
+
+        success = self._send_with_rate_limit(title, content)
+        print("✅ 主推送成功" if success else "❌ 主推送失败")
+
+        if self.alert_enabled and phase == "post":
+            self._update_alert_cache(result)
+
+        self._store_to_notion(result, phase)
+        return success
+
+    def _update_alert_cache(self, result: SignalResult):
+        now = datetime.now()
+        for s in result.signals:
+            if s.drawdown >= s.threshold:
+                key = s.name
+                last = self._alert_cache.get(key)
+                if not last or (now - last).total_seconds() >= self.alert_cooldown * 3600:
+                    self._alert_cache[key] = now
+                    print(f"🔔 黄金坑缓存已更新: {s.name} (回撤{s.drawdown}%)")
+
+    def _store_to_notion(self, result: SignalResult, phase: str):
+        try:
+            from output_layer.notion_storage import NotionStorage
+            storage = NotionStorage(self.config)
+            storage.store(result, phase)
+        except Exception as e:
+            print(f"❌ Notion 存储失败: {e}")
+
     def _format_message(self, result: SignalResult, phase: str) -> str:
         """格式化推送内容，包含所有模块"""
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
