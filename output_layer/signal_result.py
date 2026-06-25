@@ -35,3 +35,4 @@ class SignalResult(BaseModel):
     phase: str = ""
     sentiment: Optional[Dict[str, Any]] = None
     shadow: Optional[Dict[str, Any]] = None
+    relative_strength: Optional[Dict[str, Any]] = None   # ✅ 新增
