@@ -1,5 +1,4 @@
 # V系统策略配置
-
 trust:
   fresh_threshold: 0.70
   stale_threshold: 0.50
@@ -23,38 +22,38 @@ health:
     auto_recover: true
     recover_threshold: 50
 
-# ✅ 五阶段配置（盘中阶段启用 AlphaFeed）
+# ✅ 五阶段配置（严格遵守规则）
 phases:
   pre:
     name: "盘前预测"
     data_days_back: 1
     trust_adjustment: 0.95
     emoji: "🌅"
-    use_alphafeed: false      # 盘前用 Tushare
+    use_alphafeed: false        # 使用 Tushare 主
   intraday_a:
     name: "盘中A"
     data_days_back: 0
     trust_adjustment: 1.0
     emoji: "📈"
-    use_alphafeed: true       # ✅ 盘中启用 AlphaFeed
+    use_alphafeed: true         # 使用 AlphaFeed
   intraday_b:
     name: "盘中B"
     data_days_back: 0
     trust_adjustment: 1.0
     emoji: "📊"
-    use_alphafeed: true       # ✅ 盘中启用 AlphaFeed
+    use_alphafeed: true
   post:
     name: "盘后复盘"
     data_days_back: 0
     trust_adjustment: 1.0
     emoji: "📋"
-    use_alphafeed: false
+    use_alphafeed: false        # 使用 Tushare 主
   night:
     name: "夜间预测"
     data_days_back: 0
     trust_adjustment: 0.90
     emoji: "🌙"
-    use_alphafeed: false
+    use_alphafeed: false        # 使用 Tushare 主
 
 holdings:
   009777:
@@ -87,7 +86,6 @@ alert:
   cooldown_hours: 24
   push_title: "🔔 黄金坑触发预警"
 
-# ✅ AlphaFeed 配置
 alphafeed:
   enabled: true
   base_url: "https://api.alphafeed.com/v1"
