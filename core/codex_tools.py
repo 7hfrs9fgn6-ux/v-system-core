@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Codex - 工具执行层（手脚）- 增强容错版
+Codex - 工具执行层（手脚）- 增强版
+新增：网页抓取工具（fetch_webpage）
+对应精阶段 V1.1.50 智能代理架构
 """
 
 import os
 import logging
 import json
 import time
+import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
+
+# ✅ 新增：网页解析库
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
+    logging.warning("⚠️ beautifulsoup4 未安装，网页抓取工具不可用")
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +100,7 @@ class CodexTools:
             return {"status": "error", "error": str(e)}
 
     # ============================================================
-    # 工具3-9（简化版，核心功能同上）
+    # 工具3：获取市场环境
     # ============================================================
     def get_market_environment(self) -> Dict:
         try:
@@ -103,11 +113,20 @@ class CodexTools:
                 if close_col:
                     pct = (latest[close_col] - recent.iloc[0][close_col]) / recent.iloc[0][close_col] * 100
                     trend = "bull" if pct > 3 else "bear" if pct < -3 else "range"
-                    return {"status": "success", "trend": trend, "pct_change": round(pct, 2)}
+                    return {
+                        "status": "success",
+                        "trend": trend,
+                        "pct_change": round(pct, 2),
+                        "current": latest[close_col],
+                        "data_source": "AKShare"
+                    }
             return {"status": "error", "error": "无法获取市场环境"}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
+    # ============================================================
+    # 工具4：获取北向资金
+    # ============================================================
     def get_north_flow(self) -> Dict:
         try:
             import akshare as ak
@@ -116,11 +135,18 @@ class CodexTools:
                 latest = df.iloc[-1]
                 value_col = self._find_column(df, ['value', '净流入'])
                 if value_col:
-                    return {"status": "success", "north_flow": float(latest[value_col])}
+                    return {
+                        "status": "success",
+                        "north_flow": float(latest[value_col]),
+                        "data_source": "AKShare"
+                    }
             return {"status": "error", "error": "无法获取北向资金"}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
+    # ============================================================
+    # 工具5：获取烈度评分
+    # ============================================================
     def get_sentiment_score(self, sector_name: str) -> Dict:
         try:
             from core.sentiment_engine import SentimentEngine
@@ -137,6 +163,9 @@ class CodexTools:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
+    # ============================================================
+    # 工具6：获取持仓信号
+    # ============================================================
     def get_holding_signal(self, fund_code: str) -> Dict:
         try:
             import yaml
@@ -171,6 +200,9 @@ class CodexTools:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
+    # ============================================================
+    # 工具7：获取最强/最弱板块
+    # ============================================================
     def get_extreme_sectors(self) -> Dict:
         try:
             sector_names = self._get_all_sectors()
@@ -189,12 +221,16 @@ class CodexTools:
                 return {
                     "status": "success",
                     "strongest": strongest,
-                    "weakest": weakest
+                    "weakest": weakest,
+                    "data_source": "AKShare"
                 }
             return {"status": "error", "error": "无法获取板块数据"}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
+    # ============================================================
+    # 工具8：获取历史数据
+    # ============================================================
     def get_historical_data(self, sector_name: str, days: int = 30) -> Dict:
         try:
             import akshare as ak
@@ -210,12 +246,16 @@ class CodexTools:
                         "status": "success",
                         "sector": sector_name,
                         "days": days,
-                        "data": historical
+                        "data": historical,
+                        "data_source": "AKShare"
                     }
             return {"status": "error", "error": f"无法获取 {sector_name} 历史数据"}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
+    # ============================================================
+    # 工具9：生成分析报告
+    # ============================================================
     def generate_analysis_report(self, sector_name: str) -> Dict:
         try:
             quote = self.get_sector_quote(sector_name)
@@ -231,6 +271,63 @@ class CodexTools:
             }
         except Exception as e:
             return {"status": "error", "error": str(e)}
+
+    # ============================================================
+    # ✅ 工具10：网页抓取（新增）
+    # ============================================================
+    def fetch_webpage(self, url: str) -> Dict:
+        """
+        获取指定网页的内容（纯文本）
+        用于获取新闻、公告、研报等外部信息
+        """
+        if BeautifulSoup is None:
+            return {
+                "status": "error",
+                "error": "beautifulsoup4 未安装，请运行: pip install beautifulsoup4 lxml"
+            }
+
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            resp = requests.get(url, headers=headers, timeout=15)
+            
+            if resp.status_code != 200:
+                return {
+                    "status": "error",
+                    "error": f"HTTP {resp.status_code}",
+                    "url": url
+                }
+
+            # 解析 HTML
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            # 移除 script 和 style 标签
+            for script in soup(["script", "style", "noscript", "meta", "link"]):
+                script.decompose()
+            
+            # 提取文本
+            text = soup.get_text(separator='\n')
+            
+            # 清理多余空白
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            content = '\n'.join(lines[:200])  # 限制 200 行，避免太长
+            
+            return {
+                "status": "success",
+                "url": url,
+                "content": content,
+                "content_length": len(content),
+                "line_count": len(lines[:200]),
+                "data_source": "Web"
+            }
+            
+        except requests.exceptions.Timeout:
+            return {"status": "error", "error": "请求超时", "url": url}
+        except requests.exceptions.ConnectionError:
+            return {"status": "error", "error": "连接失败", "url": url}
+        except Exception as e:
+            return {"status": "error", "error": str(e), "url": url}
 
     # ============================================================
     # 辅助方法
@@ -290,57 +387,70 @@ tools_instance = CodexTools()
 TOOL_REGISTRY = {
     "get_sector_quote": {
         "name": "get_sector_quote",
-        "description": "获取指定板块的实时行情数据",
+        "description": "获取指定板块的实时行情数据（价格、涨跌幅）",
         "parameters": {"type": "object", "properties": {"sector_name": {"type": "string"}}, "required": ["sector_name"]},
         "function": tools_instance.get_sector_quote
     },
     "calculate_drawdown": {
         "name": "calculate_drawdown",
-        "description": "计算指定板块的52周回撤",
+        "description": "计算指定板块的52周回撤百分比和信号等级",
         "parameters": {"type": "object", "properties": {"sector_name": {"type": "string"}}, "required": ["sector_name"]},
         "function": tools_instance.calculate_drawdown
     },
     "get_market_environment": {
         "name": "get_market_environment",
-        "description": "获取当前市场环境",
+        "description": "获取当前市场环境（bull=牛市、bear=熊市、range=震荡）",
         "parameters": {"type": "object", "properties": {}},
         "function": tools_instance.get_market_environment
     },
     "get_north_flow": {
         "name": "get_north_flow",
-        "description": "获取北向资金净流入/流出数据",
+        "description": "获取北向资金净流入/流出数据（单位：万元）",
         "parameters": {"type": "object", "properties": {}},
         "function": tools_instance.get_north_flow
     },
     "get_sentiment_score": {
         "name": "get_sentiment_score",
-        "description": "获取指定板块的消息面烈度评分",
+        "description": "获取指定板块的消息面烈度评分（0-10分）和情绪标签",
         "parameters": {"type": "object", "properties": {"sector_name": {"type": "string"}}, "required": ["sector_name"]},
         "function": tools_instance.get_sentiment_score
     },
     "get_holding_signal": {
         "name": "get_holding_signal",
-        "description": "获取指定持仓基金的合并信号",
+        "description": "获取指定持仓基金的合并信号（基于其映射板块）",
         "parameters": {"type": "object", "properties": {"fund_code": {"type": "string"}}, "required": ["fund_code"]},
         "function": tools_instance.get_holding_signal
     },
     "get_extreme_sectors": {
         "name": "get_extreme_sectors",
-        "description": "获取当前最强和最弱的板块",
+        "description": "获取当前所有板块中最强和最弱的板块",
         "parameters": {"type": "object", "properties": {}},
         "function": tools_instance.get_extreme_sectors
     },
     "get_historical_data": {
         "name": "get_historical_data",
-        "description": "获取板块的历史数据",
+        "description": "获取板块最近N天的历史价格数据",
         "parameters": {"type": "object", "properties": {"sector_name": {"type": "string"}, "days": {"type": "integer", "default": 30}}, "required": ["sector_name"]},
         "function": tools_instance.get_historical_data
     },
     "generate_analysis_report": {
         "name": "generate_analysis_report",
-        "description": "生成单个板块的综合分析报告",
+        "description": "生成单个板块的综合分析报告（含行情、回撤、烈度）",
         "parameters": {"type": "object", "properties": {"sector_name": {"type": "string"}}, "required": ["sector_name"]},
         "function": tools_instance.generate_analysis_report
+    },
+    # ✅ 新增工具10：网页抓取
+    "fetch_webpage": {
+        "name": "fetch_webpage",
+        "description": "抓取指定URL的网页内容，提取纯文本信息。用于获取新闻、公告、研报等外部信息",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "要抓取的网页完整URL（需以http://或https://开头）"}
+            },
+            "required": ["url"]
+        },
+        "function": tools_instance.fetch_webpage
     }
 }
 
