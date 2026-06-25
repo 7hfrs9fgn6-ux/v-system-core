@@ -1,52 +1,48 @@
 # V系统策略配置
 
-# ========== 信任度配置 ==========
 trust:
   fresh_threshold: 0.70
   stale_threshold: 0.50
   expired_threshold: 0.30
   default_trust: 0.76
   penalty_rate: 0.90
-  # 信任度累积配置
   accumulation:
     enabled: true
-    history_weight: 0.5        # 历史准确率权重
-    recent_weight: 0.3         # 近期表现权重（最近10次）
-    confidence_weight: 0.2     # 置信度均值权重
-    min_samples: 5             # 最少需要5次记录才开始调整
-    decay_factor: 0.95         # 历史衰减因子
+    history_weight: 0.5
+    recent_weight: 0.3
+    confidence_weight: 0.2
+    min_samples: 5
+    decay_factor: 0.95
 
-# ========== 健康度配置 ==========
 health:
   base_score: 85
   warning_penalty: 10
-  # 熔断配置
   circuit_breaker:
     enabled: true
-    threshold: 30              # 健康度低于此值触发熔断
-    auto_recover: true         # 是否自动恢复
-    recover_threshold: 50      # 恢复阈值
+    threshold: 30
+    auto_recover: true
+    recover_threshold: 50
 
-# ========== 五阶段配置 ==========
+# ✅ 五阶段配置（盘中阶段启用 AlphaFeed）
 phases:
   pre:
     name: "盘前预测"
     data_days_back: 1
     trust_adjustment: 0.95
     emoji: "🌅"
-    use_alphafeed: false
+    use_alphafeed: false      # 盘前用 Tushare
   intraday_a:
     name: "盘中A"
     data_days_back: 0
     trust_adjustment: 1.0
     emoji: "📈"
-    use_alphafeed: true
+    use_alphafeed: true       # ✅ 盘中启用 AlphaFeed
   intraday_b:
     name: "盘中B"
     data_days_back: 0
     trust_adjustment: 1.0
     emoji: "📊"
-    use_alphafeed: true
+    use_alphafeed: true       # ✅ 盘中启用 AlphaFeed
   post:
     name: "盘后复盘"
     data_days_back: 0
@@ -60,7 +56,6 @@ phases:
     emoji: "🌙"
     use_alphafeed: false
 
-# ========== 持仓映射 ==========
 holdings:
   009777:
     name: "中欧阿尔法混合C"
@@ -81,70 +76,62 @@ holdings:
     name: "招商国证生物医药C"
     sectors: ["医药生物"]
 
-# ========== Notion 配置 ==========
 notion:
   enabled: true
   token: ""
   database_id: ""
 
-# ========== 黄金坑预警 ==========
 alert:
   enabled: true
   threshold_excess: 0
   cooldown_hours: 24
   push_title: "🔔 黄金坑触发预警"
 
-# ========== AlphaFeed 配置 ==========
+# ✅ AlphaFeed 配置
 alphafeed:
   enabled: true
   base_url: "https://api.alphafeed.com/v1"
-  # 降级链配置
   fallback_chain:
     - "tushare"
     - "akshare"
     - "cache"
 
-# ========== 消息面烈度评分 ==========
 sentiment:
   enabled: true
   cache_ttl: 3600
   tianxing_enabled: true
 
-# ========== 影子系统配置 ==========
 shadow:
   enabled: true
   reliability_threshold: 0.6
-  persist: true               # 持久化到记忆体
+  persist: true
   variants:
     - conservative
     - aggressive
     - momentum
     - mean_reversion
 
-# ========== 相对强度配置 ==========
 relative_strength:
   enabled: true
-  lookback_days: 60           # 计算周期
-  threshold: 1.2              # 相对强度阈值
+  lookback_days: 60
+  threshold: 1.2
 
-# ========== 记忆体配置 ==========
 memory:
   enabled: true
   storage_dir: "memory_data/"
   max_records: 1000
-  # 四表配置
   tables:
     signals: "signal_history.csv"
     shadow: "shadow_history.csv"
     trust: "trust_history.csv"
     deviations: "deviation_history.csv"
 
-# ========== 限流与重试配置 ==========
 rate_limit:
   tushare:
     max_calls_per_minute: 200
   alphafeed:
     max_calls_per_minute: 100
+
 retry:
   max_attempts: 3
-  delays: [0, 1, 3]           # 立即、1秒、3秒
+  delays: [0, 1, 3]
