@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DS API 智能代理（大脑）- 修复版
-接收用户意图 → 自主决策工具调用 → 返回结果
+DS API 智能代理（大脑）- 优化版
+支持更多工具调用 + 增强响应内容
 对应精阶段 V1.1.50 智能代理架构
 """
 
@@ -29,9 +29,11 @@ class DSAgent:
         self.api_key = os.environ.get("DEEPSEEK_API_KEY")
         self.base_url = "https://api.deepseek.com/v1"
         self.enabled = bool(self.api_key and self.api_key != "")
-        self.max_tool_calls = 5
-        self.max_reasoning_depth = 3
-        self.timeout = 15  # 增加超时时间
+        
+        # ✅ 优化：提高调用限制
+        self.max_tool_calls = 10      # 从 5 提高到 10
+        self.max_reasoning_depth = 5  # 从 3 提高到 5
+        self.timeout = 30             # 从 15 提高到 30
 
         # 工具注册表
         self.tools = get_tool_schema()
@@ -39,6 +41,8 @@ class DSAgent:
 
         if self.enabled:
             logger.info(f"✅ DS API 智能代理已初始化，已注册 {len(self.tools)} 个工具")
+            logger.info(f"   📊 最大工具调用: {self.max_tool_calls} 次")
+            logger.info(f"   📊 最大推理深度: {self.max_reasoning_depth} 层")
         else:
             logger.warning("⚠️ DS API Key 未配置，智能代理未启用")
 
@@ -57,11 +61,12 @@ class DSAgent:
         tool_calls_made = 0
         reasoning_depth = 0
         all_tool_results = []
+        all_responses = []
 
         try:
             while tool_calls_made < self.max_tool_calls and reasoning_depth < self.max_reasoning_depth:
                 reasoning_depth += 1
-                logger.info(f"🔄 推理轮次 {reasoning_depth}")
+                logger.info(f"🔄 推理轮次 {reasoning_depth}/{self.max_reasoning_depth}")
 
                 # 调用 DS API
                 response = self._call_ds_api(messages)
@@ -70,24 +75,34 @@ class DSAgent:
                     return {
                         "status": "error",
                         "error": "DS API 调用失败",
-                        "mode": "fallback"
+                        "mode": "fallback",
+                        "tool_calls_made": tool_calls_made,
+                        "reasoning_depth": reasoning_depth
                     }
 
                 message = response.get("choices", [{}])[0].get("message", {})
                 tool_calls = message.get("tool_calls", [])
 
+                # ✅ 保存助手响应内容
+                content = message.get("content", "")
+                if content:
+                    all_responses.append(content)
+
                 # ✅ 如果没有工具调用，直接返回结果
                 if not tool_calls:
+                    # 如果有响应内容则使用，否则使用最后一条响应
+                    final_response = content if content else (all_responses[-1] if all_responses else "分析完成")
                     return {
                         "status": "success",
-                        "response": message.get("content", "分析完成"),
+                        "response": final_response,
                         "tool_calls_made": tool_calls_made,
                         "reasoning_depth": reasoning_depth,
                         "tool_results": all_tool_results,
-                        "mode": "agent"
+                        "all_responses": all_responses,
+                        "mode": "agent_complete"
                     }
 
-                # ✅ 执行工具调用（只有成功执行才计数）
+                # ✅ 执行工具调用
                 tool_results = self._execute_tool_calls(tool_calls)
                 
                 # 记录成功执行的工具
@@ -96,11 +111,13 @@ class DSAgent:
                 all_tool_results.extend(tool_results)
 
                 # ✅ 将助手消息添加到对话中
-                messages.append({
+                assistant_msg = {
                     "role": "assistant",
-                    "content": message.get("content", ""),
-                    "tool_calls": tool_calls
-                })
+                    "content": content or "正在调用工具获取数据..."
+                }
+                if tool_calls:
+                    assistant_msg["tool_calls"] = tool_calls
+                messages.append(assistant_msg)
 
                 # ✅ 将工具执行结果添加到对话中
                 for result in tool_results:
@@ -110,13 +127,36 @@ class DSAgent:
                         "content": json.dumps(result["result"], ensure_ascii=False)
                     })
 
-            # 达到最大调用次数，返回当前结果
+            # ✅ 达到最大调用次数，生成最终总结
+            logger.info(f"⚠️ 达到最大工具调用次数 ({self.max_tool_calls})，生成总结")
+            
+            # 要求 DS API 生成最终总结
+            summary_prompt = {
+                "role": "user",
+                "content": """请根据以上所有工具调用结果，生成一份完整的中文分析报告。
+
+报告必须包含以下三个部分（每部分至少2句话）：
+1. 📊 数据摘要：列出所有关键数据和发现
+2. 📈 分析结论：基于数据给出明确判断
+3. 💡 操作建议：给出具体可执行的操作建议
+
+请确保报告结构清晰，内容完整。"""
+            }
+            messages.append(summary_prompt)
+            
+            final_response = self._call_ds_api(messages)
+            if final_response:
+                final_content = final_response.get("choices", [{}])[0].get("message", {}).get("content", "")
+            else:
+                final_content = "分析完成，详情请查看工具调用结果。"
+
             return {
                 "status": "warning",
-                "response": "推理达到最大工具调用次数，返回当前结果",
+                "response": final_content,
                 "tool_calls_made": tool_calls_made,
                 "reasoning_depth": reasoning_depth,
                 "tool_results": all_tool_results,
+                "all_responses": all_responses,
                 "mode": "agent_terminated"
             }
 
@@ -125,7 +165,9 @@ class DSAgent:
             return {
                 "status": "error",
                 "error": str(e),
-                "mode": "fallback"
+                "mode": "fallback",
+                "tool_calls_made": tool_calls_made,
+                "reasoning_depth": reasoning_depth
             }
 
     def _build_messages(self, user_query: str, context: Optional[Dict] = None) -> List[Dict]:
@@ -151,7 +193,7 @@ class DSAgent:
         return messages
 
     def _get_system_prompt(self) -> str:
-        """获取系统提示词"""
+        """✅ 优化：增强系统提示词，强制生成文字总结"""
         return """
 你是 V 系统的智能分析代理（DS API Agent）。
 
@@ -161,24 +203,44 @@ class DSAgent:
 3. 基于数据生成分析结论
 4. 返回结构化的分析报告
 
+【重要】输出格式要求：
+每次工具调用后，必须生成至少 3 句话的文本总结。
+最终报告必须包含以下三部分：
+1. 📊 数据摘要：（列出所有关键数据点，至少3个）
+2. 📈 分析结论：（给出明确判断，至少2句话）
+3. 💡 操作建议：（给出具体建议，至少2条）
+
+禁止只返回工具调用结果而不生成文字总结。
+禁止使用"根据数据..."等模糊表述，必须给出明确结论。
+
 可用工具说明：
-1. get_sector_quote - 获取板块实时行情
-2. calculate_drawdown - 计算52周回撤
-3. get_market_environment - 获取市场环境
-4. get_north_flow - 获取北向资金
-5. get_sentiment_score - 获取消息面烈度评分
-6. get_holding_signal - 获取持仓基金信号
-7. get_extreme_sectors - 获取最强/最弱板块
-8. get_historical_data - 获取历史数据
+1. get_sector_quote - 获取板块实时行情（价格、涨跌幅）
+2. calculate_drawdown - 计算52周回撤百分比
+3. get_market_environment - 获取市场环境（牛/熊/震荡）
+4. get_north_flow - 获取北向资金净流入/流出
+5. get_sentiment_score - 获取消息面烈度评分（0-10分）
+6. get_holding_signal - 获取持仓基金合并信号
+7. get_extreme_sectors - 获取最强和最弱板块
+8. get_historical_data - 获取板块历史数据
 9. generate_analysis_report - 生成综合分析报告
 
 规则约束：
 1. 每次最多调用 5 个工具
-2. 推理深度不超过 3 层
+2. 推理深度不超过 5 层
 3. 工具调用失败时，尝试降级方案
-4. 返回结果必须包含数据来源标注
+4. 返回结果必须包含数据来源标注（AKShare/NewsAPI/Tushare）
 
-输出格式：返回 JSON 格式的结果，包含 status、data、source 字段。
+示例输出：
+📊 数据摘要：
+- 电子板块回撤 0.1%，接近52周高点
+- 计算机板块回撤 55.6%，深度超跌
+- 市场环境：震荡
+📈 分析结论：
+计算机板块回撤充分，接近历史低位，存在反弹机会。
+电子板块相对强势，但追高风险较大。
+💡 操作建议：
+1. 建议关注计算机板块的超跌机会
+2. 电子板块暂不建议追高，等待回调
 """
 
     def _call_ds_api(self, messages: List[Dict]) -> Optional[Dict]:
@@ -194,7 +256,7 @@ class DSAgent:
                 "messages": messages,
                 "tools": self.tools,
                 "tool_choice": "auto",
-                "max_tokens": 2000,
+                "max_tokens": 4096,
                 "temperature": 0.3
             }
 
