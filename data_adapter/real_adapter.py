@@ -20,7 +20,7 @@ THRESHOLD_MAP = {
     "银行": 20.0, "非银金融": 20.0, "公用事业": 15.0, "煤炭": 20.0, "石油石化": 20.0
 }
 
-# ✅ AKShare 申万行业代码（纯数字，已验证可用）
+# AKShare 申万行业代码（纯数字）
 AK_CODE_MAP = {
     "电子": "801080",
     "计算机": "801750",
@@ -80,17 +80,24 @@ def retry_on_failure(max_attempts=3, delays=[0, 1, 2]):
 
 
 class RealDataAdapter:
+    """
+    数据适配器 - AKShare 主源，Tushare 备用
+    """
+
     def __init__(self, phase: str = "pre"):
         self.phase = phase
         self.tushare_token = os.environ.get("TUSHARE_TOKEN")
         self.use_tushare = bool(self.tushare_token and self.tushare_token != "dummy")
         self.data_source = "AKShare"
         self._rate_limiter = RateLimiter(max_calls=100, period=60)
+        # 存储大盘数据用于日志
+        self._index_close = 0
+        self._index_pct = 0
 
     def fetch_all(self) -> StandardMarketData:
         logger.info("🌐 开始获取数据...")
-        
-        # ✅ 1. 优先 AKShare（主数据源）
+
+        # 1. 优先 AKShare
         try:
             logger.info("📊 使用 AKShare（主数据源）获取行业数据...")
             self.data_source = "AKShare"
@@ -98,7 +105,7 @@ class RealDataAdapter:
         except Exception as e:
             logger.warning(f"⚠️ AKShare 主流程失败 ({e})，尝试备用 Tushare...")
 
-        # ✅ 2. 备用 Tushare
+        # 2. 备用 Tushare
         if self.use_tushare:
             try:
                 logger.info("📊 降级到 Tushare（备用数据源）...")
@@ -107,7 +114,7 @@ class RealDataAdapter:
             except Exception as e:
                 logger.warning(f"⚠️ Tushare 也失败 ({e})，使用模拟值兜底")
 
-        # ✅ 3. 模拟值（兜底）
+        # 3. 模拟值（兜底）
         self.data_source = "Simulated"
         return self._fetch_simulated()
 
@@ -149,33 +156,62 @@ class RealDataAdapter:
             key_driver="兜底值" if level > 0 else None
         )
 
+    def _find_column(self, df, candidates):
+        """查找匹配的列名"""
+        for c in df.columns:
+            for candidate in candidates:
+                if candidate in c or c in candidate:
+                    return c
+        return None
+
+    # ============================================================
+    # 主数据源：AKShare
+    # ============================================================
     @retry_on_failure(max_attempts=3, delays=[0, 1, 2])
     def _fetch_from_akshare(self) -> StandardMarketData:
         import akshare as ak
         target_date = self._get_target_date()
 
-        # 大盘
-try:
-    index_df = ak.stock_zh_index_daily(symbol="sh000001")
-    latest = index_df.iloc[-1]
-    pct_change = (latest['close'] - latest['open']) / latest['open'] * 100
-    trend = "bull" if pct_change > 0.5 else "bear" if pct_change < -0.5 else "range"
-    logger.info(f"📈 上证指数: {latest['close']:.2f} 涨跌幅: {pct_change:.2f}%, 环境: {trend}")
-    # ✅ 添加：保存大盘数据到实例变量，供后续使用
-    self._index_close = latest['close']
-    self._index_pct = pct_change
-except Exception as e:
-    logger.warning(f"大盘获取失败: {e}")
-    trend = "range"
-    self._index_close = 0
-    self._index_pct = 0
+        # ✅ 大盘（增强日志）
+        try:
+            index_df = ak.stock_zh_index_daily(symbol="sh000001")
+            if index_df is not None and not index_df.empty:
+                latest = index_df.iloc[-1]
+                close_col = self._find_column(index_df, ['收', 'close'])
+                if close_col:
+                    current_close = latest[close_col]
+                    # 计算涨跌幅（相对于昨日）
+                    if len(index_df) > 1:
+                        prev_close = index_df.iloc[-2][close_col]
+                        pct_change = (current_close - prev_close) / prev_close * 100
+                    else:
+                        pct_change = 0
+                    trend = "bull" if pct_change > 0.5 else "bear" if pct_change < -0.5 else "range"
+                    logger.info(f"📈 上证指数: {current_close:.2f} 涨跌幅: {pct_change:.2f}%, 环境: {trend}")
+                    self._index_close = current_close
+                    self._index_pct = pct_change
+                else:
+                    trend = "range"
+                    self._index_close = 0
+                    self._index_pct = 0
+            else:
+                trend = "range"
+                self._index_close = 0
+                self._index_pct = 0
+        except Exception as e:
+            logger.warning(f"大盘获取失败: {e}")
+            trend = "range"
+            self._index_close = 0
+            self._index_pct = 0
 
-        # 北向
+        # 北向资金
         north_flow = None
         try:
             north_df = ak.stock_hsgt_north_net_flow_in(symbol="北上")
             if not north_df.empty:
-                north_flow = round(north_df['value'].iloc[-1] / 10000, 2)
+                value_col = self._find_column(north_df, ['value', '净流入'])
+                if value_col:
+                    north_flow = round(float(north_df[value_col].iloc[-1]) / 10000, 2)
         except:
             pass
 
@@ -196,14 +232,8 @@ except Exception as e:
             try:
                 df = ak.index_hist_sw(symbol=code)
                 if df is not None and not df.empty:
-                    # 识别列名
-                    high_col = None
-                    close_col = None
-                    for c in df.columns:
-                        if '高' in c or 'high' in c.lower():
-                            high_col = c
-                        if '收' in c or 'close' in c.lower():
-                            close_col = c
+                    high_col = self._find_column(df, ['高', 'high'])
+                    close_col = self._find_column(df, ['收', 'close'])
                     if high_col and close_col:
                         high_52w = df[high_col].max()
                         current = df[close_col].iloc[-1]
@@ -254,6 +284,9 @@ except Exception as e:
             north_flow=north_flow
         )
 
+    # ============================================================
+    # 备用数据源：Tushare（仅大盘和北向，行业数据降级到 AKShare）
+    # ============================================================
     def _fetch_from_tushare(self) -> StandardMarketData:
         import tushare as ts
         ts.set_token(self.tushare_token)
@@ -271,7 +304,7 @@ except Exception as e:
             if not index_df.empty:
                 pct_change = index_df['pct_chg'].iloc[0]
                 trend = "bull" if pct_change > 0.5 else "bear" if pct_change < -0.5 else "range"
-                logger.info(f"📈 大盘涨跌幅: {pct_change:.2f}%, 环境: {trend}")
+                logger.info(f"📈 上证指数: {index_df['close'].iloc[-1]:.2f} 涨跌幅: {pct_change:.2f}%, 环境: {trend}")
             else:
                 trend = "range"
         except:
@@ -289,6 +322,9 @@ except Exception as e:
         logger.info("📊 Tushare 备用模式：行业数据从 AKShare 获取...")
         return self._fetch_from_akshare()
 
+    # ============================================================
+    # 兜底：模拟值
+    # ============================================================
     def _fetch_simulated(self) -> StandardMarketData:
         target_date = self._get_target_date()
         sectors = []
