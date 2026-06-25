@@ -1,3 +1,7 @@
+# ============================================================
+# 消息面烈度评分引擎（修复版 - 数据源显示正确）
+# ============================================================
+
 import os
 import re
 import logging
@@ -6,6 +10,7 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
+
 
 class SentimentEngine:
     def __init__(self):
@@ -47,6 +52,19 @@ class SentimentEngine:
         else:
             emotion_label = "中性"
 
+        # ✅ 确定数据源
+        data_source = "未知"
+        if self.newsapi_key and news:
+            data_source = "NewsAPI"
+        elif self.tianxing_key and news:
+            # 检查是否包含天行数据的特征
+            for n in news:
+                if n.get('source') == '天行数据':
+                    data_source = "天行数据"
+                    break
+        elif news:
+            data_source = "模拟"
+
         result = {
             "intensity_score": round(total_score, 1),
             "heat_score": round(heat_score, 1),
@@ -57,7 +75,7 @@ class SentimentEngine:
             "top_keywords": self._extract_keywords(news),
             "summary": self._generate_summary(news, emotion_label),
             "timestamp": datetime.now().isoformat(),
-            "data_source": "NewsAPI" if self.newsapi_key else "天行数据"
+            "数据源": data_source  # ✅ 使用中文键名匹配推送代码
         }
         self._cache_sentiment(cache_key, result)
         return result
@@ -94,7 +112,7 @@ class SentimentEngine:
                     return [{
                         'title': a.get('title', ''),
                         'snippet': a.get('description', '') or a.get('content', ''),
-                        'source': a.get('source', {}).get('name', ''),
+                        'source': a.get('source', {}).get('name', 'NewsAPI'),
                         'date': a.get('publishedAt', '').split('T')[0]
                     } for a in articles if a.get('title')]
             return []
@@ -114,7 +132,7 @@ class SentimentEngine:
                     return [{
                         'title': n.get('title', ''),
                         'snippet': n.get('description', '') or n.get('content', ''),
-                        'source': n.get('source', '天行数据'),
+                        'source': '天行数据',
                         'date': n.get('ctime', '').split(' ')[0] if 'ctime' in n else ''
                     } for n in news_list if n.get('title')]
             return []
@@ -209,7 +227,7 @@ class SentimentEngine:
             "top_keywords": [],
             "summary": "暂无数据",
             "timestamp": datetime.now().isoformat(),
-            "data_source": "无"
+            "数据源": "天行数据（模拟）"  # ✅ 修复：显示正确的数据源
         }
 
     def _cache_sentiment(self, key: str, data: Dict):
