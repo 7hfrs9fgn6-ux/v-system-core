@@ -10,6 +10,8 @@ from data_adapter.mock_adapter import MockDataAdapter
 from core.state_machine import VSystemStateMachine
 from core.sentiment_engine import SentimentEngine
 from core.shadow_system import ShadowSystem
+from core.memory_store import MemoryStore
+from core.relative_strength import RelativeStrengthEngine
 from output_layer.push_notifier import PushNotifier
 
 
@@ -41,9 +43,8 @@ def main():
     print(f"🚀 V系统完整闭环启动 ({phase_names.get(args.phase, args.phase)})")
     print("=" * 50)
 
-    # ========== 1. 数据获取 ==========
+    # ---------- 1. 数据获取 ----------
     print("\n📊 步骤1：获取数据...")
-
     use_alphafeed = config.get('phases', {}).get(args.phase, {}).get('use_alphafeed', False)
 
     if args.mock:
@@ -67,57 +68,75 @@ def main():
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
 
-    # ========== 2. 核心逻辑分析 ==========
+    # ---------- 2. 核心逻辑分析 ----------
     print("\n🧠 步骤2：核心逻辑分析...")
     sm = VSystemStateMachine(phase=args.phase)
     result = sm.run(market_data)
     print(f"   ✅ 分析完成，信任度: {result.trust_score:.2f}, 判断: {result.judge_status}")
 
-    # ========== 3. 消息面烈度评分 ==========
+    # ---------- 3. 消息面烈度评分 ----------
     print("\n📰 步骤3：消息面烈度评分...")
     sentiment_config = config.get('sentiment', {})
-    sentiment_results = {}
     if sentiment_config.get('enabled', False):
-        try:
-            sent_engine = SentimentEngine()
-            sector_names = [s.name for s in result.signals]
-            sentiment_results = sent_engine.batch_analyze(sector_names)
-            print(f"   ✅ 烈度评分完成，覆盖 {len(sentiment_results)} 个板块")
-            # 如果有数据源信息，打印
-            if sentiment_results:
-                sample_key = list(sentiment_results.keys())[0]
-                data_source = sentiment_results[sample_key].get('data_source', '未知')
-                print(f"   📌 数据源: {data_source}")
-        except Exception as e:
-            print(f"   ❌ 烈度评分异常: {e}")
-            sentiment_results = {}
+        sent_engine = SentimentEngine()
+        sector_names = [s.name for s in result.signals]
+        sentiment_results = sent_engine.batch_analyze(sector_names)
+        result.sentiment = sentiment_results
+        # 统计数据源
+        sources = set()
+        for s in sentiment_results.values():
+            if '数据源' in s:
+                sources.add(s['数据源'])
+        print(f"   ✅ 烈度评分完成，覆盖 {len(sentiment_results)} 个板块")
+        print(f"   📌 数据源: {', '.join(sources) if sources else '未知'}")
     else:
+        result.sentiment = {}
         print("   ⏭️ 烈度评分未启用")
 
-    # 赋值给 result（使用 setattr 或直接赋值，因为 SignalResult 已支持该字段）
-    result.sentiment = sentiment_results if sentiment_results else {}
-
-    # ========== 4. 影子系统 ==========
+    # ---------- 4. 影子系统 ----------
     print("\n👻 步骤4：影子系统运行...")
     shadow_config = config.get('shadow', {})
-    shadow_result = {}
     if shadow_config.get('enabled', False):
-        try:
-            shadow_sys = ShadowSystem()
-            shadow_result = shadow_sys.run_variants({}, result.signals)
-            reliability = shadow_result.get('reliability', {})
-            print(f"   ✅ 影子系统完成，可靠度: {reliability.get('overall_reliability', 0):.2%}")
-            print(f"   📌 建议: {reliability.get('recommendation', '')}")
-        except Exception as e:
-            print(f"   ❌ 影子系统异常: {e}")
-            shadow_result = {}
+        shadow_sys = ShadowSystem(config)
+        shadow_result = shadow_sys.run_variants({}, result.signals)
+        result.shadow = shadow_result
+        reliability = shadow_result.get('reliability', {})
+        print(f"   ✅ 影子系统完成，可靠度: {reliability.get('overall_reliability', 0):.2%}")
+        print(f"   📌 建议: {reliability.get('recommendation', '')}")
     else:
+        result.shadow = {}
         print("   ⏭️ 影子系统未启用")
 
-    result.shadow = shadow_result if shadow_result else {}
+    # ---------- 5. 相对强度 ----------
+    print("\n📊 步骤5：相对强度计算...")
+    rs_config = config.get('relative_strength', {})
+    if rs_config.get('enabled', False):
+        rs_engine = RelativeStrengthEngine(config)
+        rs_results = {}
+        for s in result.signals:
+            rs_results[s.name] = rs_engine.calculate(s.name)
+        # 将相对强度附加到result（用于展示）
+        result.relative_strength = rs_results
+        print(f"   ✅ 相对强度计算完成，覆盖 {len(rs_results)} 个板块")
+    else:
+        result.relative_strength = {}
+        print("   ⏭️ 相对强度未启用")
 
-    # ========== 5. 推送 ==========
-    print("\n📲 步骤5：推送结果并存储...")
+    # ---------- 6. 记忆体存储 ----------
+    print("\n💾 步骤6：记忆体存储...")
+    memory_config = config.get('memory', {})
+    if memory_config.get('enabled', False):
+        memory = MemoryStore(config)
+        memory.save_signal_record(result, args.phase)
+        if hasattr(result, 'shadow') and result.shadow:
+            memory.save_shadow_record(result.shadow, args.phase)
+        memory.save_trust_record(result.trust_score, result.judge_status, args.phase)
+        print("   ✅ 记忆体存储完成")
+    else:
+        print("   ⏭️ 记忆体未启用")
+
+    # ---------- 7. 推送 ----------
+    print("\n📲 步骤7：推送结果并存储...")
     notifier = PushNotifier()
     notifier.send(result, args.phase)
 
