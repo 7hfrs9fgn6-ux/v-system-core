@@ -71,7 +71,25 @@ def main():
     print(f"   ✅ 数据源: {getattr(adapter, 'data_source', 'Unknown')}")
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
+ 
+print("\n📊 步骤1.5：Tushare个股聚合反推板块...")
+try:
+    from core.sector_aggregator import SectorAggregator
+    aggregator = SectorAggregator()
+    tushare_aggregated = aggregator.get_all_sectors()
 
+    # 与 AKShare 数据对比验证
+    from core.sector_aggregator import compare_with_akshare
+    akshare_data = {s.name: {"drawdown": s.drawdown} for s in market_data.sectors}
+    comparison = compare_with_akshare(akshare_data, tushare_aggregated)
+
+    # 打印对比结果
+    print("📊 对比 Tushare聚合 vs AKShare:")
+    for sector, comp in comparison.items():
+        print(f"   {sector}: {comp['tushare_聚合回撤']}% vs {comp['akshare_回撤']}% → {comp['状态']}")
+
+except Exception as e:
+    print(f"⚠️ 板块聚合失败: {e}")
     # ---------- 2. 核心逻辑 ----------
     print("\n🧠 步骤2：核心逻辑分析...")
     sm = VSystemStateMachine(phase=args.phase)
