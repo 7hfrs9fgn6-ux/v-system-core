@@ -57,11 +57,11 @@ def main():
         adapter = AlphaFeedAdapter(phase=args.phase)
         market_data = adapter.fetch_all()
         if market_data is None:
-            print("   ⚠️ AlphaFeed 失败，降级到 Tushare...")
+            print("   ⚠️ AlphaFeed 失败，降级到 AKShare...")
             adapter = RealDataAdapter(phase=args.phase)
             market_data = adapter.fetch_all()
     else:
-        print("   使用 Tushare/AKShare 数据...")
+        print("   使用 AKShare/Tushare 数据...")
         adapter = RealDataAdapter(phase=args.phase)
         market_data = adapter.fetch_all()
 
