@@ -45,7 +45,6 @@ def main():
 
     # ---------- 1. 数据获取 ----------
     print("\n📊 步骤1：获取数据...")
-
     phase_config = config.get('phases', {}).get(args.phase, {})
     use_alphafeed = phase_config.get('use_alphafeed', False)
 
@@ -54,7 +53,6 @@ def main():
         adapter = MockDataAdapter()
         market_data = adapter.fetch_all()
     elif use_alphafeed:
-        # ✅ 盘中阶段：AlphaFeed → Tushare → AKShare → 模拟
         print("   使用 AlphaFeed 盘中实时数据...")
         adapter = AlphaFeedAdapter(phase=args.phase)
         market_data = adapter.fetch_all()
@@ -63,7 +61,6 @@ def main():
             adapter = RealDataAdapter(phase=args.phase)
             market_data = adapter.fetch_all()
     else:
-        # ✅ 非盘中阶段：Tushare（主）→ AKShare（备）→ 模拟（兜底）
         print("   使用 Tushare/AKShare 数据...")
         adapter = RealDataAdapter(phase=args.phase)
         market_data = adapter.fetch_all()
@@ -71,25 +68,7 @@ def main():
     print(f"   ✅ 数据源: {getattr(adapter, 'data_source', 'Unknown')}")
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
- 
-print("\n📊 步骤1.5：Tushare个股聚合反推板块...")
-try:
-    from core.sector_aggregator import SectorAggregator
-    aggregator = SectorAggregator()
-    tushare_aggregated = aggregator.get_all_sectors()
 
-    # 与 AKShare 数据对比验证
-    from core.sector_aggregator import compare_with_akshare
-    akshare_data = {s.name: {"drawdown": s.drawdown} for s in market_data.sectors}
-    comparison = compare_with_akshare(akshare_data, tushare_aggregated)
-
-    # 打印对比结果
-    print("📊 对比 Tushare聚合 vs AKShare:")
-    for sector, comp in comparison.items():
-        print(f"   {sector}: {comp['tushare_聚合回撤']}% vs {comp['akshare_回撤']}% → {comp['状态']}")
-
-except Exception as e:
-    print(f"⚠️ 板块聚合失败: {e}")
     # ---------- 2. 核心逻辑 ----------
     print("\n🧠 步骤2：核心逻辑分析...")
     sm = VSystemStateMachine(phase=args.phase)
