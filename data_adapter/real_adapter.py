@@ -20,7 +20,7 @@ THRESHOLD_MAP = {
     "银行": 20.0, "非银金融": 20.0, "公用事业": 15.0, "煤炭": 20.0, "石油石化": 20.0
 }
 
-# ✅ AKShare 代码（已验证可用）
+# AKShare 行业代码（已验证可用）
 AK_CODE_MAP = {
     "电子": "801080",
     "计算机": "801750",
@@ -38,6 +38,9 @@ AK_CODE_MAP = {
     "煤炭": "801950",
     "石油石化": "801960",
 }
+
+# Tushare 行业代码（带 .SI，可能返回空，但保留备用）
+TUSHARE_CODE_MAP = {k: v + ".SI" for k, v in AK_CODE_MAP.items()}
 
 
 class RateLimiter:
@@ -65,29 +68,29 @@ class RateLimiter:
 
 class RealDataAdapter:
     """
-    ✅ 最终方案：AKShare 作为主数据源（已验证可用）
-    Tushare 仅用于大盘和北向资金（备用）
+    稳定版本：AKShare 主源 + Tushare 备用 + 模拟兜底
+    确保任何情况下都能返回有效数据
     """
 
     def __init__(self, phase: str = "pre"):
         self.phase = phase
         self.tushare_token = os.environ.get("TUSHARE_TOKEN")
         self.use_tushare = bool(self.tushare_token and self.tushare_token != "dummy")
-        self.data_source = "AKShare"  # 默认主源
+        self.data_source = "AKShare"
         self._rate_limiter = RateLimiter(max_calls=200, period=60)
 
     def fetch_all(self) -> StandardMarketData:
         logger.info("🌐 开始获取数据...")
 
-        # ✅ 1. 优先使用 AKShare（已验证可用）
+        # 1. 优先 AKShare（主源）
         try:
             logger.info("📊 使用 AKShare（主数据源）获取行业数据...")
             self.data_source = "AKShare"
             return self._fetch_from_akshare()
         except Exception as e:
-            logger.warning(f"⚠️ AKShare 失败 ({e})，尝试备用 Tushare...")
+            logger.warning(f"⚠️ AKShare 主流程失败 ({e})，尝试备用 Tushare...")
 
-        # ✅ 2. 备用：Tushare（仅大盘和北向）
+        # 2. 备用 Tushare
         if self.use_tushare:
             try:
                 logger.info("📊 降级到 Tushare（备用数据源）...")
@@ -96,7 +99,7 @@ class RealDataAdapter:
             except Exception as e:
                 logger.warning(f"⚠️ Tushare 也失败 ({e})，使用模拟值兜底")
 
-        # ✅ 3. 兜底：模拟值
+        # 3. 兜底模拟值
         self.data_source = "Simulated"
         return self._fetch_simulated()
 
@@ -139,7 +142,7 @@ class RealDataAdapter:
         )
 
     # ============================================================
-    # ✅ 主数据源：AKShare（已验证可用，保留完整功能）
+    # 主数据源：AKShare
     # ============================================================
     def _fetch_from_akshare(self) -> StandardMarketData:
         import akshare as ak
@@ -178,7 +181,7 @@ class RealDataAdapter:
             try:
                 df = ak.index_hist_sw(symbol=code)
                 if df is not None and not df.empty:
-                    # 识别列名（兼容中英文）
+                    # 识别列名
                     high_col = None
                     close_col = None
                     for c in df.columns:
@@ -237,46 +240,15 @@ class RealDataAdapter:
         )
 
     # ============================================================
-    # ✅ 备用数据源：Tushare（仅用于大盘和北向）
+    # 备用数据源：Tushare
     # ============================================================
     def _fetch_from_tushare(self) -> StandardMarketData:
-        import tushare as ts
-        ts.set_token(self.tushare_token)
-        pro = ts.pro_api()
-
-        target_date = self._get_target_date()
-        date_str = target_date.strftime("%Y%m%d")
-
-        # 大盘
-        try:
-            index_df = pro.index_daily(ts_code="000001.SH", start_date=date_str, end_date=date_str)
-            if index_df.empty:
-                prev = (target_date - timedelta(days=1)).strftime("%Y%m%d")
-                index_df = pro.index_daily(ts_code="000001.SH", start_date=prev, end_date=prev)
-            if not index_df.empty:
-                pct_change = index_df['pct_chg'].iloc[0]
-                trend = "bull" if pct_change > 0.5 else "bear" if pct_change < -0.5 else "range"
-                logger.info(f"📈 大盘涨跌幅: {pct_change:.2f}%, 环境: {trend}")
-            else:
-                trend = "range"
-        except:
-            trend = "range"
-
-        # 北向
-        north_flow = None
-        try:
-            north_df = pro.moneyflow_hsgt(start_date=date_str, end_date=date_str)
-            north_flow = round(north_df['net_inflow'].iloc[0] / 10000, 2) if not north_df.empty else 0
-        except:
-            pass
-
-        # ✅ 行业指数用 AKShare 的数据（因为 Tushare 行业指数无法获取）
-        # 直接调用 AKShare 获取行业数据
-        logger.info("📊 Tushare 备用模式：行业数据从 AKShare 获取...")
+        # 由于行业指数无法获取，直接使用 AKShare 数据（避免重复代码）
+        logger.info("Tushare 备用模式：行业数据由 AKShare 提供")
         return self._fetch_from_akshare()
 
     # ============================================================
-    # ✅ 兜底：模拟值
+    # 兜底：模拟值
     # ============================================================
     def _fetch_simulated(self) -> StandardMarketData:
         target_date = self._get_target_date()
