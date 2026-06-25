@@ -1,133 +1,12 @@
-import os
-import yaml
-import requests
-import time
-import hashlib
-from datetime import datetime
-from output_layer.signal_result import SignalResult
-from output_layer.ai_commentator import AICommentator
-
-
-class PushNotifier:
-    def __init__(self, config_path="config.yaml"):
-        self.token = os.environ.get("PUSHPLUS_TOKEN")
-        self.commentator = AICommentator()
-        self.config = self._load_config(config_path)
-        self.holding_map = self.config.get("holdings", {})
-        self.holding_sectors = []
-        for fund in self.holding_map.values():
-            self.holding_sectors.extend(fund.get("sectors", []))
-        self.holding_sectors = list(set(self.holding_sectors))
-        self.phase_config = self.config.get("phases", {})
-        self.alert_config = self.config.get("alert", {})
-        self.alert_enabled = self.alert_config.get("enabled", False)
-        self.alert_cooldown = self.alert_config.get("cooldown_hours", 24)
-        self._alert_cache = {}
-        self._last_push_time = 0
-        self._push_interval = 2
-        self._sent_cache = {}
-        self._cache_ttl = 3600
-
-    def _load_config(self, path):
-        if os.path.exists(path):
-            with open(path, 'r') as f:
-                return yaml.safe_load(f)
-        return {}
-
-    def _get_content_hash(self, content: str) -> str:
-        return hashlib.md5(content.encode('utf-8')).hexdigest()
-
-    def _is_duplicate(self, content: str) -> bool:
-        content_hash = self._get_content_hash(content)
-        if content_hash in self._sent_cache:
-            last_time = self._sent_cache[content_hash]
-            if (time.time() - last_time) < self._cache_ttl:
-                return True
-        self._sent_cache[content_hash] = time.time()
-        return False
-
-    def _send_with_rate_limit(self, title, content):
-        now = time.time()
-        wait_time = self._push_interval - (now - self._last_push_time)
-        if wait_time > 0:
-            time.sleep(wait_time)
-        self._last_push_time = time.time()
-        return self._send_push(title, content)
-
-    def _send_push(self, title, content):
-        if not self.token:
-            return False
-        try:
-            resp = requests.post("http://www.pushplus.plus/send", json={
-                "token": self.token,
-                "title": title,
-                "content": content,
-                "template": "txt"
-            }, timeout=10)
-            if resp.json().get("code") == 200:
-                return True
-            else:
-                print(f"❌ 推送失败: {resp.json().get('msg')}")
-                return False
-        except Exception as e:
-            print(f"❌ 推送异常: {e}")
-            return False
-
-    def send(self, result: SignalResult, phase: str = "pre") -> bool:
-        if not self.token:
-            print("📢 [模拟] 无Token")
-            self._store_to_notion(result, phase)
-            return False
-
-        phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
-        title = f"📊 V系统 {phase_info.get('emoji', '')} {phase_info.get('name', phase)}"
-
-        content = self._format_message(result, phase)
-
-        if self._is_duplicate(content):
-            print("⏭️ 重复推送已跳过（内容相同）")
-            self._store_to_notion(result, phase)
-            return True
-
-        success = self._send_with_rate_limit(title, content)
-        print("✅ 主推送成功" if success else "❌ 主推送失败")
-
-        if self.alert_enabled and phase == "post":
-            self._update_alert_cache(result)
-
-        self._store_to_notion(result, phase)
-        return success
-
-    def _update_alert_cache(self, result: SignalResult):
-        now = datetime.now()
-        for s in result.signals:
-            if s.drawdown >= s.threshold:
-                key = s.name
-                last = self._alert_cache.get(key)
-                if not last or (now - last).total_seconds() >= self.alert_cooldown * 3600:
-                    self._alert_cache[key] = now
-                    print(f"🔔 黄金坑缓存已更新: {s.name} (回撤{s.drawdown}%)")
-
-    def _store_to_notion(self, result: SignalResult, phase: str):
-        try:
-            from output_layer.notion_storage import NotionStorage
-            storage = NotionStorage(self.config)
-            storage.store(result, phase)
-        except Exception as e:
-            print(f"❌ Notion 存储失败: {e}")
-
     def _format_message(self, result: SignalResult, phase: str) -> str:
-        """格式化推送内容，包含烈度评分、影子系统、相对强度"""
-        # ✅ 初始化 lines 在开头
-        lines = []
-
+        """格式化推送内容，包含所有模块"""
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         phase_text = phase_info.get("name", phase)
         emoji = phase_info.get("emoji", "📊")
 
         signal_dict = {s.name: s for s in result.signals}
 
-        # ---------- 1. 持仓信号 ----------
+        # 1. 持仓信号
         holding_lines = []
         for fund_code, fund_info in self.holding_map.items():
             fund_name = fund_info["name"]
@@ -155,7 +34,7 @@ class PushNotifier:
                 f"  {emoji_s} {status} {fund_name}{driver} 回撤{best_dd}% / 阈值{best_th}%"
             )
 
-        # ---------- 2. 最强/最弱（非持仓） ----------
+        # 2. 最强/最弱
         non_holding = [s for s in result.signals if s.name not in self.holding_sectors]
         strongest = max(non_holding, key=lambda x: x.signal_level) if non_holding else None
         weakest = min(non_holding, key=lambda x: x.signal_level) if non_holding else None
@@ -164,7 +43,7 @@ class PushNotifier:
             em = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠" if s.signal_level >= -1 else "🔴"
             return f"{em} {s.name} (回撤{s.drawdown}% / 阈值{s.threshold}%)"
 
-        # ---------- 3. 烈度评分 ----------
+        # 3. 烈度评分
         sentiment_lines = []
         if hasattr(result, 'sentiment') and result.sentiment:
             sentiment_lines.append("【📰 消息面烈度评分】")
@@ -177,14 +56,13 @@ class PushNotifier:
                         bar = "█" * int(intensity) + "░" * (10 - int(intensity))
                         sentiment_lines.append(f"    {sec}: {bar} {intensity}/10 ({emotion})")
                         break
-            # 聚合数据源
             sources = set()
             for v in result.sentiment.values():
                 if '数据源' in v:
                     sources.add(v['数据源'])
             sentiment_lines.append(f"    数据源: {', '.join(sources) if sources else '未知'}")
 
-        # ---------- 4. 影子系统 ----------
+        # 4. 影子系统
         shadow_lines = []
         if hasattr(result, 'shadow') and result.shadow:
             shadow_lines.append("【👻 影子系统】")
@@ -193,7 +71,7 @@ class PushNotifier:
             shadow_lines.append(f"    共识: {reliability.get('consensus_level', '未知')}")
             shadow_lines.append(f"    📌 {reliability.get('recommendation', '')}")
 
-        # ---------- 5. 相对强度 ----------
+        # 5. 相对强度
         relative_lines = []
         if hasattr(result, 'relative_strength') and result.relative_strength:
             relative_lines.append("【📊 相对强度】")
@@ -207,10 +85,32 @@ class PushNotifier:
                         relative_lines.append(f"    {sec}: {emoji_r} {ratio:.2f} ({interp})")
                         break
 
-        # ---------- 6. AI点评 ----------
+        # 6. AI点评
         ai_comment = self.commentator.generate_comment(result, self.holding_sectors)
 
-        # ---------- 7. 黄金坑预警（合并） ----------
+        # 7. 智能代理分析（新增）
+        agent_lines = []
+        if hasattr(result, 'agent_analysis') and result.agent_analysis:
+            agent_data = result.agent_analysis
+            agent_lines.append("【🧠 智能代理分析】")
+            response = agent_data.get('response', '')
+            if response:
+                if len(response) > 300:
+                    response = response[:300] + "..."
+                agent_lines.append(f"  {response}")
+            else:
+                tool_calls = agent_data.get('tool_calls_made', 0)
+                if tool_calls > 0:
+                    agent_lines.append(f"  工具调用: {tool_calls} 次")
+                else:
+                    agent_lines.append("  分析完成，无额外工具调用")
+            mode = agent_data.get('mode', '')
+            if mode == 'agent_terminated':
+                agent_lines.append("  ⚠️ 达到最大推理次数")
+            elif mode == 'fallback':
+                agent_lines.append("  ⚠️ 使用降级模式")
+
+        # 8. 黄金坑预警
         alert_lines = []
         if self.alert_enabled and phase == "post":
             now = datetime.now()
@@ -230,7 +130,8 @@ class PushNotifier:
                     alert_lines.append(f"    {em} {s.name}：回撤{s.drawdown}% / 阈值{s.threshold}% (超出{excess:.1f}%)")
                 alert_lines.append("  📌 建议：关注以上板块，可考虑分批建仓")
 
-        # ---------- 8. 组装推送 ----------
+        # 9. 组装
+        lines = []
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         lines.append(f"{emoji} V系统 {phase_text} [{result.analysis_time}]")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -274,64 +175,11 @@ class PushNotifier:
         lines.append("【🤖 AI 点评】")
         lines.append(f"  {ai_comment}")
         lines.append("")
-    def _format_message(self, result: SignalResult, phase: str) -> str:
-        """格式化推送内容，增加智能代理分析"""
-        # ... 前面的代码保持不变 ...
-        
-        # ---------- 6. AI点评 ----------
-        ai_comment = self.commentator.generate_comment(result, self.holding_sectors)
 
-        # ---------- 7. 智能代理分析（新增） ----------
-        agent_lines = []
-        if hasattr(result, 'agent_analysis') and result.agent_analysis:
-            agent_data = result.agent_analysis
-            agent_lines.append("【🧠 智能代理分析】")
-            # 如果有返回的文本内容
-            response = agent_data.get('response', '')
-            if response:
-                # 限制长度，避免推送过长
-                if len(response) > 300:
-                    response = response[:300] + "..."
-                agent_lines.append(f"  {response}")
-            else:
-                # 如果无文本，显示工具调用情况
-                tool_calls = agent_data.get('tool_calls_made', 0)
-                if tool_calls > 0:
-                    agent_lines.append(f"  工具调用: {tool_calls} 次")
-                else:
-                    agent_lines.append("  分析完成，无额外工具调用")
-            # 添加状态信息
-            mode = agent_data.get('mode', '')
-            if mode == 'agent_terminated':
-                agent_lines.append("  ⚠️ 达到最大推理次数")
-            elif mode == 'fallback':
-                agent_lines.append("  ⚠️ 使用降级模式")
-
-        # ---------- 8. 黄金坑预警（合并） ----------
-        alert_lines = []
-        if self.alert_enabled and phase == "post":
-            # ... 原有黄金坑逻辑 ...
-
-        # ---------- 9. 组装推送 ----------
-        lines = []
-        # ... 头部 ...
-        lines.append("【🤖 AI 点评】")
-        lines.append(f"  {ai_comment}")
-        lines.append("")
-
-        # 插入Agent分析
         if agent_lines:
             lines.extend(agent_lines)
             lines.append("")
 
-        if result.warnings:
-            lines.append(f"⚠️ 告警: {', '.join(result.warnings)}")
-        else:
-            lines.append("✅ 无异常告警")
-        
-        # ... 结尾 ...
-        return "\n".join(lines)
-        
         if result.warnings:
             lines.append(f"⚠️ 告警: {', '.join(result.warnings)}")
         else:
