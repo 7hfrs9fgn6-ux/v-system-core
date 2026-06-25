@@ -25,6 +25,7 @@ class Bridge:
         "get_extreme_sectors",
         "get_historical_data",
         "generate_analysis_report",
+        "fetch_webpage",  # ✅ 新增
     ]
 
     FORBIDDEN_PATTERNS = [
