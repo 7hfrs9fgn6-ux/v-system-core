@@ -191,9 +191,9 @@ class PushNotifier:
             shadow_lines.append(f"    📌 {reliability.get('recommendation', '')}")
 
         # ---------- 5. 相对强度 ----------
-        relative_lines = []
         if hasattr(result, 'relative_strength') and result.relative_strength:
-            relative_lines.append("【📊 相对强度】")
+            lines.append("")
+            lines.append("【📊 相对强度】")
             for fund_code, fund_info in self.holding_map.items():
                 for sec in fund_info.get('sectors', []):
                     if sec in result.relative_strength:
@@ -201,7 +201,7 @@ class PushNotifier:
                         ratio = rs.get('strength_ratio', 1.0)
                         interp = rs.get('interpretation', '中性')
                         emoji_r = "🟢" if interp == "强势" else "🟡" if interp == "中性" else "🔴"
-                        relative_lines.append(f"    {sec}: {emoji_r} {ratio:.2f} ({interp})")
+                        lines.append(f"    {sec}: {emoji_r} {ratio:.2f} ({interp})")
                         break
 
         # ---------- 6. AI点评 ----------
