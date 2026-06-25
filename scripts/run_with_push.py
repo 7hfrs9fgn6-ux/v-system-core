@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 V系统完整闭环执行脚本
-修复：夜间预测（night）阶段只做消息面分析，不做核心逻辑判断
+支持五阶段：pre / intraday_a / intraday_b / post / night
 """
 
 import sys
 import os
 import argparse
+from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml
@@ -76,46 +77,24 @@ def main():
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
 
-    # 将大盘数据附加到 result（供推送使用）
+    # 将大盘数据附加到 market_data（供推送使用）
     if hasattr(adapter, '_index_close') and hasattr(adapter, '_index_pct'):
         market_data._index_data = {
             'close': adapter._index_close,
             'pct': adapter._index_pct
         }
 
-    # ---------- 2. 核心逻辑（夜间预测跳过） ----------
-    result = None
-    
-    if args.phase == "night":
-        print("\n🌙 夜间预测模式：跳过核心逻辑分析，专注消息面汇总...")
-        # 夜间阶段不运行状态机，直接创建空的 result 对象
-        from output_layer.signal_result import SignalResult
-        result = SignalResult(
-            version="V1.1.55",
-            analysis_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            overall_suggestion="消息面汇总",
-            trust_score=0.0,
-            health_score=85,
-            judge_status="消息面",
-            agent_mode="消息面分析",
-            drift_flag=False,
-            signals=market_data.sectors,
-            warnings=[],
-            phase=phase_names.get(args.phase, args.phase)
-        )
-        # 保留大盘数据
-        if hasattr(market_data, '_index_data'):
-            result._index_data = market_data._index_data
-    else:
-        print("\n🧠 步骤2：核心逻辑分析...")
-        sm = VSystemStateMachine(phase=args.phase)
-        result = sm.run(market_data)
-        print(f"   ✅ 分析完成，信任度: {result.trust_score:.2f}, 判断: {result.judge_status}")
-        # 将大盘数据附加到 result
-        if hasattr(market_data, '_index_data'):
-            result._index_data = market_data._index_data
+    # ---------- 2. 核心逻辑 ----------
+    print("\n🧠 步骤2：核心逻辑分析...")
+    sm = VSystemStateMachine(phase=args.phase)
+    result = sm.run(market_data)
+    print(f"   ✅ 分析完成，信任度: {result.trust_score:.2f}, 判断: {result.judge_status}")
 
-    # ---------- 3. 烈度评分（所有阶段都需要） ----------
+    # 将大盘数据附加到 result
+    if hasattr(market_data, '_index_data'):
+        result._index_data = market_data._index_data
+
+    # ---------- 3. 烈度评分 ----------
     print("\n📰 步骤3：消息面烈度评分...")
     sentiment_config = config.get('sentiment', {})
     if sentiment_config.get('enabled', False):
@@ -133,55 +112,48 @@ def main():
         result.sentiment = {}
         print("   ⏭️ 烈度评分未启用")
 
-    # ---------- 4. 影子系统（夜间预测跳过） ----------
-    if args.phase != "night":
-        print("\n👻 步骤4：影子系统运行...")
-        shadow_config = config.get('shadow', {})
-        if shadow_config.get('enabled', False):
-            shadow_sys = ShadowSystem(config)
-            shadow_result = shadow_sys.run_variants({}, result.signals)
-            result.shadow = shadow_result
-            reliability = shadow_result.get('reliability', {})
-            print(f"   ✅ 影子系统完成，可靠度: {reliability.get('overall_reliability', 0):.2%}")
-            print(f"   📌 建议: {reliability.get('recommendation', '')}")
-        else:
-            result.shadow = {}
-            print("   ⏭️ 影子系统未启用")
+    # ---------- 4. 影子系统 ----------
+    print("\n👻 步骤4：影子系统运行...")
+    shadow_config = config.get('shadow', {})
+    if shadow_config.get('enabled', False):
+        shadow_sys = ShadowSystem(config)
+        shadow_result = shadow_sys.run_variants({}, result.signals)
+        result.shadow = shadow_result
+        reliability = shadow_result.get('reliability', {})
+        print(f"   ✅ 影子系统完成，可靠度: {reliability.get('overall_reliability', 0):.2%}")
+        print(f"   📌 建议: {reliability.get('recommendation', '')}")
     else:
         result.shadow = {}
-        print("   ⏭️ 夜间预测：跳过影子系统")
+        print("   ⏭️ 影子系统未启用")
 
-    # ---------- 5. 相对强度（夜间预测跳过） ----------
-    if args.phase != "night":
-        print("\n📊 步骤5：相对强度计算...")
-        rs_config = config.get('relative_strength', {})
-        if rs_config.get('enabled', False):
-            rs_engine = RelativeStrengthEngine(config)
-            rs_results = {}
-            for s in result.signals:
-                rs_results[s.name] = rs_engine.calculate(s.name)
-            result.relative_strength = rs_results
-            print(f"   ✅ 相对强度计算完成，覆盖 {len(rs_results)} 个板块")
-        else:
-            result.relative_strength = {}
-            print("   ⏭️ 相对强度未启用")
+    # ---------- 5. 相对强度 ----------
+    print("\n📊 步骤5：相对强度计算...")
+    rs_config = config.get('relative_strength', {})
+    if rs_config.get('enabled', False):
+        rs_engine = RelativeStrengthEngine(config)
+        rs_results = {}
+        for s in result.signals:
+            rs_results[s.name] = rs_engine.calculate(s.name)
+        result.relative_strength = rs_results
+        print(f"   ✅ 相对强度计算完成，覆盖 {len(rs_results)} 个板块")
     else:
         result.relative_strength = {}
-        print("   ⏭️ 夜间预测：跳过相对强度")
+        print("   ⏭️ 相对强度未启用")
 
-    # ---------- 6. 记忆体（夜间预测只保存烈度评分） ----------
+    # ---------- 6. 记忆体 ----------
     print("\n💾 步骤6：记忆体存储...")
     memory_config = config.get('memory', {})
     if memory_config.get('enabled', False):
         memory = MemoryStore(config)
-        # 夜间预测只保存信号和烈度评分
         memory.save_signal_record(result, args.phase)
+        if hasattr(result, 'shadow') and result.shadow:
+            memory.save_shadow_record(result.shadow, args.phase)
         memory.save_trust_record(result.trust_score, result.judge_status, args.phase)
-        print("   ✅ 记忆体存储完成（烈度评分已保存）")
+        print("   ✅ 记忆体存储完成")
     else:
         print("   ⏭️ 记忆体未启用")
 
-    # ---------- 7. 智能代理分析（夜间预测启用，专注消息面） ----------
+    # ---------- 7. 智能代理分析 ----------
     print("\n🧠 步骤7：智能代理分析...")
     agent_config = config.get('agent', {})
     if agent_config.get('enabled', False):
@@ -191,15 +163,7 @@ def main():
 
             agent = DSAgent()
             if agent.enabled:
-                if args.phase == "night":
-                    # ✅ 夜间预测：专门查询消息面
-                    agent_result = agent.think(
-                        "请分析今日A股市场的消息面情况，包括：1. 主要财经新闻和事件 2. 北向资金动向 3. 市场情绪变化 4. 对次日开盘的可能影响。不需要分析技术指标，只关注消息面。"
-                    )
-                else:
-                    # 其他阶段：正常分析
-                    agent_result = agent.get_daily_summary()
-                
+                agent_result = agent.get_daily_summary()
                 result.agent_analysis = agent_result
                 print(f"   ✅ 智能代理分析完成，工具调用: {agent_result.get('tool_calls_made', 0)} 次")
 
