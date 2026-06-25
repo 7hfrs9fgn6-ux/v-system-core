@@ -1,6 +1,7 @@
 import os
 import random
 import logging
+import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from output_layer.signal_result import StandardMarketData, SectorSignal, FreshnessLevel
@@ -23,7 +24,6 @@ THRESHOLD_MAP = {
     "银行": 20.0, "非银金融": 20.0, "公用事业": 15.0, "煤炭": 20.0, "石油石化": 20.0
 }
 
-# 申万一级行业代码（用于 AKShare 和 Tushare）
 SECTOR_CODE_MAP = {
     "电子": "801080",
     "计算机": "801750",
@@ -45,12 +45,68 @@ SECTOR_CODE_MAP = {
 TUSHARE_CODE_MAP = {k: v + ".SI" for k, v in SECTOR_CODE_MAP.items()}
 
 
+# ============================================================
+# 限流器
+# ============================================================
+class RateLimiter:
+    """简单限流器（滑动窗口）"""
+
+    def __init__(self, max_calls: int, period: int = 60):
+        self.max_calls = max_calls
+        self.period = period
+        self.calls = []
+
+    def acquire(self) -> bool:
+        now = time.time()
+        # 清理过期记录
+        self.calls = [t for t in self.calls if now - t < self.period]
+        if len(self.calls) < self.max_calls:
+            self.calls.append(now)
+            return True
+        return False
+
+    def wait(self) -> float:
+        now = time.time()
+        if not self.calls:
+            return 0
+        oldest = self.calls[0]
+        wait_time = self.period - (now - oldest) + 0.1
+        return max(0, wait_time)
+
+
+# ============================================================
+# 指数退火重试装饰器
+# ============================================================
+def retry_on_failure(max_attempts: int = 3, delays: list = None):
+    if delays is None:
+        delays = [0, 1, 3]
+
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if attempt == max_attempts - 1:
+                        raise
+                    logger.warning(f"⚠️ 重试 {attempt+1}/{max_attempts}: {e}，等待 {delays[attempt]}s")
+                    time.sleep(delays[attempt])
+            return None
+        return wrapper
+    return decorator
+
+
+# ============================================================
+# RealDataAdapter 主类
+# ============================================================
 class RealDataAdapter:
     def __init__(self, phase: str = "pre"):
         self.phase = phase
         self.tushare_token = os.environ.get("TUSHARE_TOKEN")
         self.use_tushare = bool(self.tushare_token and self.tushare_token != "dummy")
         self.data_source = "AKShare"
+        # 限流器
+        self._rate_limiter = RateLimiter(max_calls=200, period=60)
 
     def fetch_all(self) -> StandardMarketData:
         """主入口：优先 AKShare，失败则 Tushare 或模拟"""
@@ -73,7 +129,6 @@ class RealDataAdapter:
     # 辅助方法
     # ============================================================
     def _get_target_date(self):
-        """根据阶段获取目标日期（跳过周末）"""
         phase_days_back = {
             "pre": 1,
             "intraday_a": 0,
@@ -83,12 +138,11 @@ class RealDataAdapter:
         }
         days_back = phase_days_back.get(self.phase, 0)
         target = datetime.now() - timedelta(days=days_back)
-        while target.weekday() >= 5:  # 周六=5, 周日=6
+        while target.weekday() >= 5:
             target -= timedelta(days=1)
         return target
 
     def _make_fallback_sector(self, name: str) -> SectorSignal:
-        """生成单个板块的兜底数据（随机值）"""
         threshold = THRESHOLD_MAP[name]
         drawdown = round(random.uniform(15.0, 40.0), 1)
         excess = drawdown - threshold
@@ -113,11 +167,18 @@ class RealDataAdapter:
         )
 
     # ============================================================
-    # Layer 1: AKShare 真实数据（并发获取）
+    # Layer 1: AKShare 真实数据（并发获取 + 限流）
     # ============================================================
+    @retry_on_failure(max_attempts=3, delays=[0, 1, 3])
     def _fetch_from_akshare_real(self) -> StandardMarketData:
         import akshare as ak
         target_date = self._get_target_date()
+
+        # 限流检查
+        if not self._rate_limiter.acquire():
+            wait_time = self._rate_limiter.wait()
+            logger.info(f"⏳ 限流等待 {wait_time:.1f}s")
+            time.sleep(wait_time)
 
         # 大盘环境
         try:
@@ -129,7 +190,7 @@ class RealDataAdapter:
         except:
             trend = "range"
 
-        # 北向资金（尝试获取）
+        # 北向资金
         north_flow = None
         try:
             north_df = ak.stock_hsgt_north_net_flow_in(symbol="北上")
@@ -149,7 +210,7 @@ class RealDataAdapter:
             for future in future_to_name:
                 name = future_to_name[future]
                 try:
-                    result = future.result(timeout=15)  # 单个板块超时15秒
+                    result = future.result(timeout=15)
                     sectors.append(result)
                 except FuturesTimeoutError:
                     logger.warning(f"⚠️ {name} 获取超时，使用随机值")
@@ -174,10 +235,15 @@ class RealDataAdapter:
         code = SECTOR_CODE_MAP.get(name)
         if not code:
             return self._make_fallback_sector(name)
+
+        # 限流检查
+        if not self._rate_limiter.acquire():
+            wait_time = self._rate_limiter.wait()
+            time.sleep(wait_time)
+
         try:
             df = ak.index_hist_sw(symbol=code)
             if df is not None and not df.empty:
-                # 识别列名（中文或英文）
                 high_col = None
                 close_col = None
                 for c in df.columns:
@@ -225,12 +291,18 @@ class RealDataAdapter:
         )
 
     # ============================================================
-    # Layer 2: Tushare 备用数据
+    # Layer 2: Tushare 备用数据（带限流+重试）
     # ============================================================
+    @retry_on_failure(max_attempts=3, delays=[0, 1, 3])
     def _fetch_from_tushare(self) -> StandardMarketData:
         import tushare as ts
         ts.set_token(self.tushare_token)
         pro = ts.pro_api()
+
+        # 限流检查
+        if not self._rate_limiter.acquire():
+            wait_time = self._rate_limiter.wait()
+            time.sleep(wait_time)
 
         target_date = self._get_target_date()
         date_str = target_date.strftime("%Y%m%d")
@@ -267,6 +339,9 @@ class RealDataAdapter:
                 drawdown = round(random.uniform(15.0, 40.0), 1)
             else:
                 try:
+                    # 限流检查
+                    if not self._rate_limiter.acquire():
+                        time.sleep(self._rate_limiter.wait())
                     df = pro.index_daily(ts_code=code, start_date=start_date_52w, end_date=today_str)
                     if df is not None and not df.empty and 'high' in df.columns and 'close' in df.columns:
                         high_52w = df['high'].max()
