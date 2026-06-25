@@ -274,7 +274,64 @@ class PushNotifier:
         lines.append("【🤖 AI 点评】")
         lines.append(f"  {ai_comment}")
         lines.append("")
+    def _format_message(self, result: SignalResult, phase: str) -> str:
+        """格式化推送内容，增加智能代理分析"""
+        # ... 前面的代码保持不变 ...
+        
+        # ---------- 6. AI点评 ----------
+        ai_comment = self.commentator.generate_comment(result, self.holding_sectors)
 
+        # ---------- 7. 智能代理分析（新增） ----------
+        agent_lines = []
+        if hasattr(result, 'agent_analysis') and result.agent_analysis:
+            agent_data = result.agent_analysis
+            agent_lines.append("【🧠 智能代理分析】")
+            # 如果有返回的文本内容
+            response = agent_data.get('response', '')
+            if response:
+                # 限制长度，避免推送过长
+                if len(response) > 300:
+                    response = response[:300] + "..."
+                agent_lines.append(f"  {response}")
+            else:
+                # 如果无文本，显示工具调用情况
+                tool_calls = agent_data.get('tool_calls_made', 0)
+                if tool_calls > 0:
+                    agent_lines.append(f"  工具调用: {tool_calls} 次")
+                else:
+                    agent_lines.append("  分析完成，无额外工具调用")
+            # 添加状态信息
+            mode = agent_data.get('mode', '')
+            if mode == 'agent_terminated':
+                agent_lines.append("  ⚠️ 达到最大推理次数")
+            elif mode == 'fallback':
+                agent_lines.append("  ⚠️ 使用降级模式")
+
+        # ---------- 8. 黄金坑预警（合并） ----------
+        alert_lines = []
+        if self.alert_enabled and phase == "post":
+            # ... 原有黄金坑逻辑 ...
+
+        # ---------- 9. 组装推送 ----------
+        lines = []
+        # ... 头部 ...
+        lines.append("【🤖 AI 点评】")
+        lines.append(f"  {ai_comment}")
+        lines.append("")
+
+        # 插入Agent分析
+        if agent_lines:
+            lines.extend(agent_lines)
+            lines.append("")
+
+        if result.warnings:
+            lines.append(f"⚠️ 告警: {', '.join(result.warnings)}")
+        else:
+            lines.append("✅ 无异常告警")
+        
+        # ... 结尾 ...
+        return "\n".join(lines)
+        
         if result.warnings:
             lines.append(f"⚠️ 告警: {', '.join(result.warnings)}")
         else:
