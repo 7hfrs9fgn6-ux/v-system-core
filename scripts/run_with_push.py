@@ -45,22 +45,27 @@ def main():
 
     # ---------- 1. 数据获取 ----------
     print("\n📊 步骤1：获取数据...")
-    use_alphafeed = config.get('phases', {}).get(args.phase, {}).get('use_alphafeed', False)
+
+    # ✅ 根据阶段选择数据源
+    phase_config = config.get('phases', {}).get(args.phase, {})
+    use_alphafeed = phase_config.get('use_alphafeed', False)
 
     if args.mock:
         print("   使用模拟数据（测试模式）")
         adapter = MockDataAdapter()
         market_data = adapter.fetch_all()
     elif use_alphafeed:
+        # ✅ 盘中阶段：优先 AlphaFeed
         print("   使用 AlphaFeed 盘中实时数据...")
         adapter = AlphaFeedAdapter(phase=args.phase)
         market_data = adapter.fetch_all()
         if market_data is None:
-            print("   ⚠️ AlphaFeed 失败，降级到 AKShare...")
+            print("   ⚠️ AlphaFeed 失败，降级到 Tushare...")
             adapter = RealDataAdapter(phase=args.phase)
             market_data = adapter.fetch_all()
     else:
-        print("   使用 AKShare/Tushare 数据...")
+        # ✅ 盘前/盘后/夜间：使用 Tushare（主）
+        print("   使用 Tushare/AKShare 数据...")
         adapter = RealDataAdapter(phase=args.phase)
         market_data = adapter.fetch_all()
 
@@ -82,7 +87,6 @@ def main():
         sector_names = [s.name for s in result.signals]
         sentiment_results = sent_engine.batch_analyze(sector_names)
         result.sentiment = sentiment_results
-        # 统计数据源
         sources = set()
         for s in sentiment_results.values():
             if '数据源' in s:
@@ -115,7 +119,6 @@ def main():
         rs_results = {}
         for s in result.signals:
             rs_results[s.name] = rs_engine.calculate(s.name)
-        # 将相对强度附加到result（用于展示）
         result.relative_strength = rs_results
         print(f"   ✅ 相对强度计算完成，覆盖 {len(rs_results)} 个板块")
     else:
