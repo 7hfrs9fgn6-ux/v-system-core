@@ -223,12 +223,14 @@ class DSAgent:
 7. get_extreme_sectors - 获取最强和最弱板块
 8. get_historical_data - 获取板块历史数据
 9. generate_analysis_report - 生成综合分析报告
+10. fetch_webpage - 🔥 抓取网页内容（新闻、公告、研报等）
 
 规则约束：
 1. 每次最多调用 5 个工具
 2. 推理深度不超过 5 层
 3. 工具调用失败时，尝试降级方案
 4. 返回结果必须包含数据来源标注（AKShare/NewsAPI/Tushare）
+5. 网页抓取时优先抓取权威来源（东方财富、同花顺、财联社等）
 
 示例输出：
 📊 数据摘要：
