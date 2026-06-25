@@ -3,7 +3,6 @@ import random
 import logging
 import time
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from output_layer.signal_result import StandardMarketData, SectorSignal, FreshnessLevel
 
 logging.basicConfig(level=logging.INFO)
@@ -21,25 +20,27 @@ THRESHOLD_MAP = {
     "银行": 20.0, "非银金融": 20.0, "公用事业": 15.0, "煤炭": 20.0, "石油石化": 20.0
 }
 
-SECTOR_CODE_MAP = {
-    "电子": "801080",
-    "计算机": "801750",
-    "通信": "801770",
-    "传媒": "801760",
-    "医药生物": "801150",
-    "食品饮料": "801120",
-    "家用电器": "801110",
-    "电力设备": "801730",
-    "汽车": "801880",
-    "国防军工": "801740",
-    "银行": "801780",
-    "非银金融": "801790",
-    "公用事业": "801160",
-    "煤炭": "801950",
-    "石油石化": "801960",
+# Tushare 申万行业指数代码（注意：需带 .SI）
+TUSHARE_CODE_MAP = {
+    "电子": "801080.SI",
+    "计算机": "801750.SI",
+    "通信": "801770.SI",
+    "传媒": "801760.SI",
+    "医药生物": "801150.SI",
+    "食品饮料": "801120.SI",
+    "家用电器": "801110.SI",
+    "电力设备": "801730.SI",
+    "汽车": "801880.SI",
+    "国防军工": "801740.SI",
+    "银行": "801780.SI",
+    "非银金融": "801790.SI",
+    "公用事业": "801160.SI",
+    "煤炭": "801950.SI",
+    "石油石化": "801960.SI",
 }
 
-TUSHARE_CODE_MAP = {k: v + ".SI" for k, v in SECTOR_CODE_MAP.items()}
+# AKShare 申万行业代码（不带后缀）
+AK_CODE_MAP = {k: v.replace(".SI", "") for k, v in TUSHARE_CODE_MAP.items()}
 
 
 class RateLimiter:
@@ -65,30 +66,10 @@ class RateLimiter:
         return max(0, wait_time)
 
 
-def retry_on_failure(max_attempts: int = 3, delays: list = None):
-    if delays is None:
-        delays = [0, 1, 2]
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            for attempt in range(max_attempts):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    if attempt == max_attempts - 1:
-                        raise
-                    logger.warning(f"⚠️ 重试 {attempt+1}/{max_attempts}: {e}，等待 {delays[attempt]}s")
-                    time.sleep(delays[attempt])
-            return None
-        return wrapper
-    return decorator
-
-
 class RealDataAdapter:
     """
-    ✅ 修复：按规则调整数据源优先级
-    主源：Tushare（盘后数据）
-    备源：AKShare（免费降级）
-    兜底：模拟值
+    数据适配器 - 严格按照 V2.0.2 规则：
+    ✅ Tushare（主）→ AKShare（备）→ 模拟（兜底）
     """
 
     def __init__(self, phase: str = "pre"):
@@ -99,10 +80,9 @@ class RealDataAdapter:
         self._rate_limiter = RateLimiter(max_calls=200, period=60)
 
     def fetch_all(self) -> StandardMarketData:
-        """主入口：优先Tushare，失败则AKShare，再失败则模拟"""
         logger.info("🌐 开始获取数据...")
 
-        # ✅ 第一步：优先使用 Tushare（主数据源）
+        # ✅ 1. 优先 Tushare（主数据源）
         if self.use_tushare:
             try:
                 logger.info("📊 使用 Tushare（主数据源）获取行业数据...")
@@ -111,7 +91,7 @@ class RealDataAdapter:
             except Exception as e:
                 logger.warning(f"⚠️ Tushare 主流程失败 ({e})，降级到 AKShare...")
 
-        # ✅ 第二步：降级到 AKShare（备用）
+        # ✅ 2. 降级 AKShare（备用）
         try:
             logger.info("📊 降级到 AKShare（备用数据源）...")
             self.data_source = "AKShare"
@@ -119,7 +99,7 @@ class RealDataAdapter:
         except Exception as e:
             logger.warning(f"⚠️ AKShare 也失败 ({e})，使用模拟值兜底")
 
-        # ✅ 第三步：模拟值（兜底）
+        # ✅ 3. 模拟值（兜底）
         self.data_source = "Simulated"
         return self._fetch_simulated()
 
@@ -162,9 +142,8 @@ class RealDataAdapter:
         )
 
     # ============================================================
-    # ✅ 主数据源：Tushare（优先）
+    # ✅ 主数据源：Tushare
     # ============================================================
-    @retry_on_failure(max_attempts=2, delays=[0, 2])
     def _fetch_from_tushare(self) -> StandardMarketData:
         import tushare as ts
         ts.set_token(self.tushare_token)
@@ -175,7 +154,7 @@ class RealDataAdapter:
         today_str = datetime.now().strftime("%Y%m%d")
         start_date_52w = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
 
-        # 1. 大盘
+        # 大盘
         try:
             index_df = pro.index_daily(ts_code="000001.SH", start_date=date_str, end_date=date_str)
             if index_df.empty:
@@ -187,10 +166,11 @@ class RealDataAdapter:
                 logger.info(f"📈 大盘涨跌幅: {pct_change:.2f}%, 环境: {trend}")
             else:
                 trend = "range"
-        except:
+        except Exception as e:
+            logger.warning(f"大盘获取失败: {e}")
             trend = "range"
 
-        # 2. 北向
+        # 北向
         north_flow = None
         try:
             north_df = pro.moneyflow_hsgt(start_date=date_str, end_date=date_str)
@@ -198,7 +178,7 @@ class RealDataAdapter:
         except:
             pass
 
-        # 3. 各板块（串行获取，避免限流）
+        # 各板块
         sectors = []
         logger.info("📊 Tushare 获取各板块52周回撤...")
 
@@ -208,7 +188,7 @@ class RealDataAdapter:
                 sectors.append(self._make_fallback_sector(name))
                 continue
 
-            # 限流检查
+            # 限流
             if not self._rate_limiter.acquire():
                 time.sleep(self._rate_limiter.wait())
 
@@ -264,9 +244,8 @@ class RealDataAdapter:
         )
 
     # ============================================================
-    # ✅ 备用数据源：AKShare（降级）
+    # ✅ 备用数据源：AKShare
     # ============================================================
-    @retry_on_failure(max_attempts=2, delays=[0, 2])
     def _fetch_from_akshare(self) -> StandardMarketData:
         import akshare as ak
         target_date = self._get_target_date()
@@ -290,23 +269,20 @@ class RealDataAdapter:
         except:
             pass
 
-        # 各板块（串行获取，避免过载）
+        # 各板块
         sectors = []
         logger.info("📊 AKShare 获取各板块52周回撤...")
 
         for name in SECTOR_NAMES:
-            code = SECTOR_CODE_MAP.get(name)
+            code = AK_CODE_MAP.get(name)
             if not code:
                 sectors.append(self._make_fallback_sector(name))
                 continue
 
-            # 限流检查
-            if not self._rate_limiter.acquire():
-                time.sleep(self._rate_limiter.wait())
-
             try:
                 df = ak.index_hist_sw(symbol=code)
                 if df is not None and not df.empty:
+                    # 识别列名（AKShare 可能用中文）
                     high_col = None
                     close_col = None
                     for c in df.columns:
@@ -365,7 +341,7 @@ class RealDataAdapter:
         )
 
     # ============================================================
-    # 兜底：模拟值
+    # ✅ 兜底：模拟值
     # ============================================================
     def _fetch_simulated(self) -> StandardMarketData:
         target_date = self._get_target_date()
