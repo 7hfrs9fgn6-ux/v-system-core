@@ -139,6 +139,6 @@ retry:
 # ============================================================
 agent:
   enabled: true  # ⚠️ 默认关闭，设置为 true 启用
-  max_tool_calls: 5
-  max_reasoning_depth: 3
-  timeout: 15
+  max_tool_calls: 10
+  max_reasoning_depth: 5
+  timeout: 30
