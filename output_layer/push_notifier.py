@@ -342,3 +342,103 @@ class PushNotifier:
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         return "\n".join(lines)
+
+def _format_message(self, result: SignalResult, phase: str) -> str:
+    """格式化推送内容 - 根据阶段使用不同格式"""
+    
+    # ✅ 夜间预测：专注消息面，不显示判断状态和操作建议
+    if phase == "night":
+        return self._format_night_message(result)
+    
+    # 其他阶段：使用正常格式
+    return self._format_normal_message(result, phase)
+
+
+def _format_night_message(self, result: SignalResult) -> str:
+    """夜间预测专用格式：消息面汇总 + 次日预判"""
+    
+    phase_info = self.phase_config.get("night", {"name": "夜间预测", "emoji": "🌙"})
+    phase_text = phase_info.get("name", "夜间预测")
+    emoji = phase_info.get("emoji", "🌙")
+    
+    signal_dict = {s.name: s for s in result.signals}
+    
+    lines = []
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"{emoji} V系统 {phase_text}")
+    lines.append(f"📅 {result.analysis_time[:16]}")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    
+    # ✅ 大盘指数
+    index_close = getattr(self, '_index_close', 0)
+    index_pct = getattr(self, '_index_pct', 0)
+    if index_close > 0:
+        arrow = "📈" if index_pct > 0 else "📉" if index_pct < 0 else "➡️"
+        lines.append(f"【📊 今日收盘】{index_close:.2f}  {arrow} {index_pct:+.2f}%")
+    
+    # ✅ 消息面烈度评分（重点）
+    if hasattr(result, 'sentiment') and result.sentiment:
+        lines.append("")
+        lines.append("【📰 今日消息面分析】")
+        # 找出烈度最高的3个板块
+        sorted_sentiment = sorted(
+            [s for s in result.sentiment.items() if s[0] in self.holding_sectors or s[0] in signal_dict],
+            key=lambda x: x[1].get('intensity_score', 0),
+            reverse=True
+        )[:5]
+        
+        for sec, data in sorted_sentiment:
+            intensity = data.get('intensity_score', 0)
+            emotion = data.get('emotion_label', '中性')
+            bar = "█" * int(intensity) + "░" * (10 - int(intensity))
+            summary = data.get('summary', '')
+            lines.append(f"  {sec}: {bar} {intensity}/10 ({emotion})")
+            if summary:
+                lines.append(f"     └─ {summary[:50]}...")
+        
+        sources = set()
+        for v in result.sentiment.values():
+            if '数据源' in v:
+                sources.add(v['数据源'])
+        lines.append(f"  📌 数据来源: {', '.join(sources) if sources else '未知'}")
+    
+    # ✅ 智能代理分析（夜间版本）
+    if hasattr(result, 'agent_analysis') and result.agent_analysis:
+        agent_data = result.agent_analysis
+        response = agent_data.get('response', '')
+        if response:
+            # 提取关键信息（简化为3个要点）
+            lines.append("")
+            lines.append("【🧠 晚间消息汇总】")
+            # 提取前300字作为摘要
+            if len(response) > 300:
+                response = response[:300] + "..."
+            lines.append(f"  {response}")
+    
+    # ✅ 次日预判（简化为方向提示）
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("【🌅 次日预判】")
+    
+    # 简单方向预判：基于大盘涨跌 + 烈度评分综合
+    if index_pct > 0.5 and index_close > 0:
+        lines.append("  📈 今日小幅上涨，关注隔夜海外市场动态")
+    elif index_pct < -0.5 and index_close > 0:
+        lines.append("  📉 今日小幅下跌，关注是否有企稳信号")
+    else:
+        lines.append("  ➡️ 今日窄幅震荡，等待方向明确")
+    
+    # 基于烈度评分的补充
+    if hasattr(result, 'sentiment') and result.sentiment:
+        # 检查是否有烈度 >= 7 的板块（高度关注）
+        high_attention = []
+        for sec, data in result.sentiment.items():
+            if data.get('intensity_score', 0) >= 7:
+                high_attention.append(sec)
+        if high_attention:
+            lines.append(f"  🔥 重点关注: {', '.join(high_attention)}")
+    
+    lines.append("  💡 建议：关注晚间消息面变化，明日开盘前再看盘前预测")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    
+    return "\n".join(lines)
