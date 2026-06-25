@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-V系统完整闭环执行脚本（集成智能代理）
+V系统完整闭环执行脚本
+修复：Agent分析在推送之前完成，只推送一次
 """
 
 import sys
@@ -140,39 +141,35 @@ def main():
     else:
         print("   ⏭️ 记忆体未启用")
 
-    # ---------- 7. 推送 ----------
-    print("\n📲 步骤7：推送结果并存储...")
-    notifier = PushNotifier()
-    notifier.send(result, args.phase)
-
-    # ---------- 8. 智能代理分析（新增，默认关闭） ----------
-    print("\n🧠 步骤8：智能代理分析...")
+    # ---------- 7. ✅ 智能代理分析（移到推送之前） ----------
+    print("\n🧠 步骤7：智能代理分析...")
     agent_config = config.get('agent', {})
     if agent_config.get('enabled', False):
         try:
             from core.ds_agent import DSAgent
             from core.bridge import Bridge
-            
+
             agent = DSAgent()
             if agent.enabled:
                 # 生成每日摘要
                 agent_result = agent.get_daily_summary()
                 result.agent_analysis = agent_result
                 print(f"   ✅ 智能代理分析完成，工具调用: {agent_result.get('tool_calls_made', 0)} 次")
-                
+
                 # 打印 Bridge 统计
                 stats = Bridge.get_stats()
                 print(f"   🔧 Bridge 统计: 成功率 {stats.get('success_rate', 0)}%")
-                
-                # 重新推送（包含Agent分析）
-                print("   📲 重新推送包含Agent分析的结果...")
-                notifier.send(result, args.phase)
             else:
                 print("   ⏭️ Agent 未启用（API Key 未配置）")
         except Exception as e:
             print(f"   ⚠️ Agent 分析失败: {e}")
     else:
         print("   ⏭️ Agent 未配置（请在 config.yaml 中设置 agent.enabled: true）")
+
+    # ---------- 8. ✅ 推送结果（只推送一次，包含Agent分析） ----------
+    print("\n📲 步骤8：推送结果并存储...")
+    notifier = PushNotifier()
+    notifier.send(result, args.phase)
 
     print("\n" + "=" * 50)
     print("✅ 闭环执行完成！")
