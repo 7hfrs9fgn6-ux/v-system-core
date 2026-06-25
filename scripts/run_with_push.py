@@ -46,7 +46,6 @@ def main():
     # ---------- 1. 数据获取 ----------
     print("\n📊 步骤1：获取数据...")
 
-    # ✅ 根据阶段选择数据源
     phase_config = config.get('phases', {}).get(args.phase, {})
     use_alphafeed = phase_config.get('use_alphafeed', False)
 
@@ -55,7 +54,7 @@ def main():
         adapter = MockDataAdapter()
         market_data = adapter.fetch_all()
     elif use_alphafeed:
-        # ✅ 盘中阶段：优先 AlphaFeed
+        # ✅ 盘中阶段：AlphaFeed → Tushare → AKShare → 模拟
         print("   使用 AlphaFeed 盘中实时数据...")
         adapter = AlphaFeedAdapter(phase=args.phase)
         market_data = adapter.fetch_all()
@@ -64,7 +63,7 @@ def main():
             adapter = RealDataAdapter(phase=args.phase)
             market_data = adapter.fetch_all()
     else:
-        # ✅ 盘前/盘后/夜间：使用 Tushare（主）
+        # ✅ 非盘中阶段：Tushare（主）→ AKShare（备）→ 模拟（兜底）
         print("   使用 Tushare/AKShare 数据...")
         adapter = RealDataAdapter(phase=args.phase)
         market_data = adapter.fetch_all()
@@ -73,13 +72,13 @@ def main():
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
 
-    # ---------- 2. 核心逻辑分析 ----------
+    # ---------- 2. 核心逻辑 ----------
     print("\n🧠 步骤2：核心逻辑分析...")
     sm = VSystemStateMachine(phase=args.phase)
     result = sm.run(market_data)
     print(f"   ✅ 分析完成，信任度: {result.trust_score:.2f}, 判断: {result.judge_status}")
 
-    # ---------- 3. 消息面烈度评分 ----------
+    # ---------- 3. 烈度评分 ----------
     print("\n📰 步骤3：消息面烈度评分...")
     sentiment_config = config.get('sentiment', {})
     if sentiment_config.get('enabled', False):
@@ -125,7 +124,7 @@ def main():
         result.relative_strength = {}
         print("   ⏭️ 相对强度未启用")
 
-    # ---------- 6. 记忆体存储 ----------
+    # ---------- 6. 记忆体 ----------
     print("\n💾 步骤6：记忆体存储...")
     memory_config = config.get('memory', {})
     if memory_config.get('enabled', False):
