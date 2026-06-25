@@ -76,12 +76,18 @@ def main():
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
 
-    # ---------- 2. 核心逻辑 ----------
+ # ---------- 2. 核心逻辑 ----------
     print("\n🧠 步骤2：核心逻辑分析...")
     sm = VSystemStateMachine(phase=args.phase)
     result = sm.run(market_data)
     print(f"   ✅ 分析完成，信任度: {result.trust_score:.2f}, 判断: {result.judge_status}")
-
+    
+    # 将大盘数据附加到 result
+    if hasattr(adapter, '_index_close') and hasattr(adapter, '_index_pct'):
+        result._index_data = {
+            'close': adapter._index_close,
+            'pct': adapter._index_pct
+        }
     # ---------- 3. 烈度评分 ----------
     print("\n📰 步骤3：消息面烈度评分...")
     sentiment_config = config.get('sentiment', {})
