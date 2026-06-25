@@ -118,6 +118,9 @@ class PushNotifier:
 
     def _format_message(self, result: SignalResult, phase: str) -> str:
         """格式化推送内容，包含烈度评分、影子系统、相对强度"""
+        # ✅ 初始化 lines 在开头
+        lines = []
+
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         phase_text = phase_info.get("name", phase)
         emoji = phase_info.get("emoji", "📊")
@@ -174,12 +177,12 @@ class PushNotifier:
                         bar = "█" * int(intensity) + "░" * (10 - int(intensity))
                         sentiment_lines.append(f"    {sec}: {bar} {intensity}/10 ({emotion})")
                         break
-            # 获取数据源
-            data_sources = set()
+            # 聚合数据源
+            sources = set()
             for v in result.sentiment.values():
                 if '数据源' in v:
-                    data_sources.add(v['数据源'])
-            sentiment_lines.append(f"    数据源: {', '.join(data_sources) if data_sources else '未知'}")
+                    sources.add(v['数据源'])
+            sentiment_lines.append(f"    数据源: {', '.join(sources) if sources else '未知'}")
 
         # ---------- 4. 影子系统 ----------
         shadow_lines = []
@@ -191,9 +194,9 @@ class PushNotifier:
             shadow_lines.append(f"    📌 {reliability.get('recommendation', '')}")
 
         # ---------- 5. 相对强度 ----------
+        relative_lines = []
         if hasattr(result, 'relative_strength') and result.relative_strength:
-            lines.append("")
-            lines.append("【📊 相对强度】")
+            relative_lines.append("【📊 相对强度】")
             for fund_code, fund_info in self.holding_map.items():
                 for sec in fund_info.get('sectors', []):
                     if sec in result.relative_strength:
@@ -201,7 +204,7 @@ class PushNotifier:
                         ratio = rs.get('strength_ratio', 1.0)
                         interp = rs.get('interpretation', '中性')
                         emoji_r = "🟢" if interp == "强势" else "🟡" if interp == "中性" else "🔴"
-                        lines.append(f"    {sec}: {emoji_r} {ratio:.2f} ({interp})")
+                        relative_lines.append(f"    {sec}: {emoji_r} {ratio:.2f} ({interp})")
                         break
 
         # ---------- 6. AI点评 ----------
@@ -228,7 +231,6 @@ class PushNotifier:
                 alert_lines.append("  📌 建议：关注以上板块，可考虑分批建仓")
 
         # ---------- 8. 组装推送 ----------
-        lines = []
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         lines.append(f"{emoji} V系统 {phase_text} [{result.analysis_time}]")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
