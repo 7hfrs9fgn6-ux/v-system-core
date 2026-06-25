@@ -155,15 +155,20 @@ class RealDataAdapter:
         target_date = self._get_target_date()
 
         # 大盘
-        try:
-            index_df = ak.stock_zh_index_daily(symbol="sh000001")
-            latest = index_df.iloc[-1]
-            pct_change = (latest['close'] - latest['open']) / latest['open'] * 100
-            trend = "bull" if pct_change > 0.5 else "bear" if pct_change < -0.5 else "range"
-            logger.info(f"📈 大盘涨跌幅: {pct_change:.2f}%, 环境: {trend}")
-        except Exception as e:
-            logger.warning(f"大盘获取失败: {e}")
-            trend = "range"
+try:
+    index_df = ak.stock_zh_index_daily(symbol="sh000001")
+    latest = index_df.iloc[-1]
+    pct_change = (latest['close'] - latest['open']) / latest['open'] * 100
+    trend = "bull" if pct_change > 0.5 else "bear" if pct_change < -0.5 else "range"
+    logger.info(f"📈 上证指数: {latest['close']:.2f} 涨跌幅: {pct_change:.2f}%, 环境: {trend}")
+    # ✅ 添加：保存大盘数据到实例变量，供后续使用
+    self._index_close = latest['close']
+    self._index_pct = pct_change
+except Exception as e:
+    logger.warning(f"大盘获取失败: {e}")
+    trend = "range"
+    self._index_close = 0
+    self._index_pct = 0
 
         # 北向
         north_flow = None
