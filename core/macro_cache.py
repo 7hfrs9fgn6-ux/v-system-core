@@ -43,13 +43,9 @@ class MacroCache:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return file_path
 
-    # ✅ 核心：获取数据时，忽略缓存过期（永久有效）
-    def _is_cache_valid(self, cache_time: str) -> bool:
-        """永久有效，只要缓存存在就返回True"""
-        if not cache_time:
-            return False
-        # 只要有缓存时间，就认为有效（永久存储）
-        return True
+   def _is_cache_valid(self, cache_time: str) -> bool:
+    """永久有效：只要缓存存在就返回True"""
+    return cache_time is not None and len(cache_time) > 0
 
     # ============================================================
     # 美股数据（永久存储）
