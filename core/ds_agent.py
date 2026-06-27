@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DS API 智能代理（大脑）- P3升级版
-支持研报级分析输出
+DS API 智能代理（大脑）- 稳定版
+支持研报级分析输出，最大工具调用 15 次
 """
 
 import os
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class DSAgent:
     """
-    DS API 智能代理 - P3 升级版
+    DS API 智能代理
     自主识别意图 → 决策工具调用 → 多步推理 → 返回研报级结果
     """
 
@@ -28,7 +28,7 @@ class DSAgent:
         self.api_key = os.environ.get("DEEPSEEK_API_KEY")
         self.base_url = "https://api.deepseek.com/v1"
         self.enabled = bool(self.api_key and self.api_key != "")
-        self.max_tool_calls = 15
+        self.max_tool_calls = 15      # ✅ 稳定版：15 次
         self.max_reasoning_depth = 5
         self.timeout = 30
 
@@ -43,7 +43,9 @@ class DSAgent:
             logger.warning("⚠️ DS API Key 未配置，智能代理未启用")
 
     def think(self, user_query: str, context: Optional[Dict] = None) -> Dict:
-        """核心方法：接收用户查询，返回推理结果"""
+        """
+        核心方法：接收用户查询，返回推理结果
+        """
         if not self.enabled:
             return {"status": "error", "error": "DS API 未启用", "mode": "fallback"}
 
@@ -143,7 +145,7 @@ class DSAgent:
         return messages
 
     def _get_system_prompt(self) -> str:
-        """✅ P3升级：强制研报级输出格式"""
+        """系统提示词：强制研报级输出格式"""
         return """
 你是 V 系统的智能分析代理（DS API Agent）。你的核心职责是生成研报级的市场分析报告。
 
@@ -222,19 +224,19 @@ class DSAgent:
         return results
 
     # ============================================================
-    # P3：研报级分析方法
+    # 快捷方法
     # ============================================================
     def get_daily_summary(self) -> Dict:
-        """获取每日摘要（P3升级：研报级）"""
+        """获取每日摘要（研报级）"""
         query = """请生成今日完整的研报级市场分析报告，包含：市场概览、板块逻辑、风险预警、操作建议、总结五大部分。请确保分析深入、逻辑清晰、建议具体。"""
         return self.think(query)
 
     def get_analysis_report(self) -> Dict:
-        """P3新增：专门获取研报级分析报告"""
+        """专门获取研报级分析报告"""
         return self.get_daily_summary()
 
     def analyze_sector(self, sector_name: str) -> Dict:
-        """分析单个板块（P3升级）"""
+        """分析单个板块"""
         query = f"""请对 {sector_name} 板块进行深入分析，包含：
         1. 当前行情（价格、回撤、相对强度）
         2. 逻辑解读：为什么涨/跌？
@@ -243,6 +245,6 @@ class DSAgent:
         return self.think(query)
 
     def analyze_holdings(self) -> Dict:
-        """分析持仓（P3升级）"""
+        """分析持仓"""
         query = """请分析所有持仓基金，给出具体操作建议（加仓/减仓/持有/观望），并说明理由。"""
         return self.think(query)
