@@ -142,3 +142,56 @@ agent:
   max_tool_calls: 10
   max_reasoning_depth: 5
   timeout: 30
+  
+# ============================================================
+# P0阶段：宏观数据采集配置
+# ============================================================
+macro:
+  enabled: true
+  cache_ttl: 300  # 5分钟缓存
+  data_sources:
+    - "akshare"   # 主数据源
+  # 美股配置
+  us_market:
+    indices:
+      - "道琼斯"
+      - "纳斯达克"
+      - "标普500"
+    semiconductor:
+      - "费城半导体"
+    tech_giants:
+      - "苹果"
+      - "英伟达"
+      - "微软"
+      - "谷歌"
+      - "亚马逊"
+      - "Meta"
+      - "特斯拉"
+      - "美光"
+      - "英特尔"
+      - "AMD"
+  # 亚太配置
+  asia_market:
+    indices:
+      - "日经225"
+      - "韩国KOSPI"
+      - "恒生指数"
+      - "台湾加权"
+  # 欧洲配置
+  europe_market:
+    indices:
+      - "德国DAX"
+      - "英国富时"
+      - "法国CAC"
+  # 大宗商品
+  commodities:
+    oil:
+      - "CL"  # WTI
+      - "B"   # 布伦特
+    gold: "GC"
+  # 汇率
+  forex:
+    - "美元兑人民币"
+  # A50期货
+  a50_futures:
+    symbol: "A50"
