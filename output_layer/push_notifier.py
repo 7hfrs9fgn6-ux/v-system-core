@@ -27,10 +27,8 @@ class PushNotifier:
         self._push_interval = 2
         self._sent_cache = {}
         self._cache_ttl = 3600
-        # 大盘数据
         self._index_close = 0
         self._index_pct = 0
-        # 宏观数据（P1新增）
         self._macro_data = {}
 
     def _load_config(self, path):
@@ -84,12 +82,10 @@ class PushNotifier:
             self._store_to_notion(result, phase)
             return False
 
-        # 读取大盘数据
         if hasattr(result, '_index_data'):
             self._index_close = result._index_data.get('close', 0)
             self._index_pct = result._index_data.get('pct', 0)
 
-        # ✅ 读取宏观数据（P1新增）
         self._macro_data = getattr(result, '_macro_data', {})
 
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
@@ -133,7 +129,6 @@ class PushNotifier:
     # 主格式化入口
     # ============================================================
     def _format_message(self, result: SignalResult, phase: str) -> str:
-        """根据阶段选择对应的推送格式"""
         if phase == "night":
             return self._format_night_message(result)
         else:
@@ -150,7 +145,6 @@ class PushNotifier:
         signal_dict = {s.name: s for s in result.signals}
         lines = []
 
-        # 头部
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         lines.append(f"{emoji} V系统 {phase_text}")
         lines.append(f"📅 {result.analysis_time[:16]}")
@@ -169,94 +163,118 @@ class PushNotifier:
             else:
                 lines.append("   └─ 小幅波动，正常整理")
 
-        # ========== 宏观数据展示（P1新增） ==========
+        # ========== 宏观数据展示（修复空值处理） ==========
         if self._macro_data:
             macro = self._macro_data
             lines.append("")
             lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
             lines.append("【🌍 隔夜外围市场】")
-            
+
             # 美股
             us = macro.get('us_market', {})
             us_indices = us.get('indices', [])
             if us_indices:
                 us_line = "  🇺🇸 美股: "
                 for idx in us_indices[:3]:
-                    pct = idx.get('pct_change', 0)
-                    arrow = "▲" if pct and pct > 0 else "▼" if pct and pct < 0 else "→"
-                    us_line += f"{idx.get('name', '')} {arrow} {abs(pct or 0):.2f}%  "
+                    pct = idx.get('pct_change')
+                    if pct is not None:
+                        arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                        us_line += f"{idx.get('name', '')} {arrow} {abs(pct):.2f}%  "
+                    else:
+                        us_line += f"{idx.get('name', '')} → --%  "
                 lines.append(us_line)
-            
+
             # 费城半导体
             sem = us.get('semiconductor', {})
-            if sem.get('price'):
-                pct = sem.get('pct_change', 0)
-                arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
-                lines.append(f"  🔌 费城半导体: {arrow} {abs(pct):.2f}%")
-            
-            # 科技巨头（只显示涨跌幅最大的3个）
+            if sem and sem.get('price') is not None:
+                pct = sem.get('pct_change')
+                if pct is not None:
+                    arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                    lines.append(f"  🔌 费城半导体: {arrow} {abs(pct):.2f}%")
+                else:
+                    lines.append(f"  🔌 费城半导体: → --%")
+
+            # 科技巨头
             techs = us.get('tech_giants', [])
             if techs:
-                sorted_techs = sorted(techs, key=lambda x: abs(x.get('pct_change', 0)), reverse=True)
+                sorted_techs = sorted(techs, key=lambda x: abs(x.get('pct_change') or 0), reverse=True)
                 top_techs = sorted_techs[:3]
                 tech_line = "  💻 科技巨头: "
                 for t in top_techs:
-                    pct = t.get('pct_change', 0)
-                    arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
-                    tech_line += f"{t.get('name', '')} {arrow} {abs(pct):.2f}%  "
+                    pct = t.get('pct_change')
+                    if pct is not None:
+                        arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                        tech_line += f"{t.get('name', '')} {arrow} {abs(pct):.2f}%  "
+                    else:
+                        tech_line += f"{t.get('name', '')} → --%  "
                 lines.append(tech_line)
-            
+
             # 亚太
             asia = macro.get('asia_market', {})
             asia_indices = asia.get('indices', [])
             if asia_indices:
                 asia_line = "  🌏 亚太: "
                 for idx in asia_indices[:4]:
-                    pct = idx.get('pct_change', 0)
-                    arrow = "▲" if pct and pct > 0 else "▼" if pct and pct < 0 else "→"
-                    asia_line += f"{idx.get('name', '')} {arrow} {abs(pct or 0):.2f}%  "
+                    pct = idx.get('pct_change')
+                    if pct is not None:
+                        arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                        asia_line += f"{idx.get('name', '')} {arrow} {abs(pct):.2f}%  "
+                    else:
+                        asia_line += f"{idx.get('name', '')} → --%  "
                 lines.append(asia_line)
-            
+
             # 欧洲
             euro = macro.get('europe_market', {})
             euro_indices = euro.get('indices', [])
             if euro_indices:
                 euro_line = "  🇪🇺 欧洲: "
                 for idx in euro_indices[:3]:
-                    pct = idx.get('pct_change', 0)
-                    arrow = "▲" if pct and pct > 0 else "▼" if pct and pct < 0 else "→"
-                    euro_line += f"{idx.get('name', '')} {arrow} {abs(pct or 0):.2f}%  "
+                    pct = idx.get('pct_change')
+                    if pct is not None:
+                        arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                        euro_line += f"{idx.get('name', '')} {arrow} {abs(pct):.2f}%  "
+                    else:
+                        euro_line += f"{idx.get('name', '')} → --%  "
                 lines.append(euro_line)
-            
+
             # 大宗商品
             comm = macro.get('commodities', {})
             oil_list = comm.get('oil', [])
             oil_line = "  🛢️ 原油: "
             for oil in oil_list:
-                pct = oil.get('pct_change', 0)
-                arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
-                oil_line += f"{oil.get('name', '')} {arrow} {abs(pct):.2f}%  "
+                pct = oil.get('pct_change')
+                if pct is not None:
+                    arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                    oil_line += f"{oil.get('name', '')} {arrow} {abs(pct):.2f}%  "
+                else:
+                    oil_line += f"{oil.get('name', '')} → --%  "
             lines.append(oil_line)
-            
+
             # 黄金
             gold = comm.get('gold', {})
-            if gold.get('price'):
-                pct = gold.get('pct_change', 0)
-                arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
-                lines.append(f"  🥇 黄金: {arrow} {abs(pct):.2f}%  (${gold.get('price', 0):.2f})")
-            
+            if gold and gold.get('price') is not None:
+                pct = gold.get('pct_change')
+                if pct is not None:
+                    arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                    lines.append(f"  🥇 黄金: {arrow} {abs(pct):.2f}%  (${gold.get('price', 0):.2f})")
+                else:
+                    lines.append(f"  🥇 黄金: → --%  (${gold.get('price', 0):.2f})")
+
             # 汇率 + A50
             forex = macro.get('forex', {})
             usd_cny = forex.get('usd_cny', {})
-            if usd_cny.get('onshore'):
+            if usd_cny.get('onshore') is not None:
                 lines.append(f"  💱 人民币: {usd_cny.get('onshore', 0):.4f}")
-            
+
             a50 = macro.get('a50_futures', {})
-            if a50.get('price'):
-                pct = a50.get('pct_change', 0)
-                arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
-                lines.append(f"  📊 A50期货: {a50.get('price', 0):.2f} {arrow} {abs(pct):.2f}%")
-            
+            if a50.get('price') is not None:
+                pct = a50.get('pct_change')
+                if pct is not None:
+                    arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                    lines.append(f"  📊 A50期货: {a50.get('price', 0):.2f} {arrow} {abs(pct):.2f}%")
+                else:
+                    lines.append(f"  📊 A50期货: {a50.get('price', 0):.2f} → --%")
+
             lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         # 核心建议
@@ -462,7 +480,7 @@ class PushNotifier:
         return "\n".join(lines)
 
     # ============================================================
-    # 夜间预测专用格式（只显示消息面 + 次日预判）
+    # 夜间预测专用格式
     # ============================================================
     def _format_night_message(self, result: SignalResult) -> str:
         phase_info = self.phase_config.get("night", {"name": "夜间预测", "emoji": "🌙"})
@@ -475,7 +493,6 @@ class PushNotifier:
         lines.append(f"📅 {result.analysis_time[:16]}")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        # 1. 今日收盘
         if self._index_close > 0:
             arrow = "📈" if self._index_pct > 0 else "📉" if self._index_pct < 0 else "➡️"
             lines.append(f"【📊 今日收盘】{self._index_close:.2f}  {arrow} {self._index_pct:+.2f}%")
@@ -486,17 +503,14 @@ class PushNotifier:
             elif self._index_pct < -1:
                 lines.append("   └─ 明显回调，注意风险")
 
-        # 2. 消息面烈度评分
         if hasattr(result, 'sentiment') and result.sentiment:
             lines.append("")
             lines.append("【📰 今日消息面扫描】")
-            # 按烈度排序
             sorted_sentiment = sorted(
                 result.sentiment.items(),
                 key=lambda x: x[1].get('intensity_score', 0),
                 reverse=True
-            )[:6]  # 最多显示6个
-
+            )[:6]
             for sec, data in sorted_sentiment:
                 intensity = data.get('intensity_score', 0)
                 emotion = data.get('emotion_label', '中性')
@@ -505,14 +519,12 @@ class PushNotifier:
                 lines.append(f"  {sec}: {bar} {intensity}/10 ({emotion})")
                 if summary:
                     lines.append(f"     └─ {summary[:40]}...")
-
             sources = set()
             for v in result.sentiment.values():
                 if '数据源' in v:
                     sources.add(v['数据源'])
             lines.append(f"  📌 数据来源: {', '.join(sources) if sources else '未知'}")
 
-        # 3. Agent 消息面分析
         if hasattr(result, 'agent_analysis') and result.agent_analysis:
             agent_data = result.agent_analysis
             response = agent_data.get('response', '')
@@ -523,11 +535,9 @@ class PushNotifier:
                     response = response[:250] + "..."
                 lines.append(f"  {response}")
 
-        # 4. 次日预判
         lines.append("")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         lines.append("【🌅 次日开盘预判】")
-
         if self._index_pct > 1:
             lines.append("  📈 今日强势收盘，明日有望延续")
         elif self._index_pct > 0.3:
@@ -539,7 +549,6 @@ class PushNotifier:
         else:
             lines.append("  📉 今日明显下跌，短期或有惯性下探")
 
-        # 高烈度板块提示
         if hasattr(result, 'sentiment') and result.sentiment:
             high_sectors = [
                 sec for sec, data in result.sentiment.items()
