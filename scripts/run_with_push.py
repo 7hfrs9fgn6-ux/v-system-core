@@ -3,7 +3,7 @@
 """
 V系统完整闭环执行脚本
 支持五阶段：pre / intraday_a / intraday_b / post / night
-所有数据采集均使用永久缓存 + 按日期去重，避免重复获取
+集成：宏观数据永久缓存、市场数据按日期去重、记忆体自动提交
 """
 
 import sys
@@ -79,7 +79,7 @@ def main():
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
 
-    # 将大盘数据附加到 market_data（供后续使用）
+    # 将大盘数据附加到 market_data
     if hasattr(adapter, '_index_close') and hasattr(adapter, '_index_pct'):
         market_data._index_data = {
             'close': adapter._index_close,
@@ -92,16 +92,15 @@ def main():
     result = sm.run(market_data)
     print(f"   ✅ 分析完成，信任度: {result.trust_score:.2f}, 判断: {result.judge_status}")
 
-    # 将大盘数据附加到 result
     if hasattr(market_data, '_index_data'):
         result._index_data = market_data._index_data
 
-    # ---------- 2.5 宏观数据采集（永久缓存，按日期去重） ----------
+    # ---------- 2.5 宏观数据采集（永久缓存，自动判断日期） ----------
     print("\n🌐 步骤2.5：宏观数据采集...")
     try:
         from core.macro_collector import MacroCollector
         macro = MacroCollector()
-        # 自动判断是否今日已有数据，没有则获取
+        # ✅ 不再传递 force_refresh，让方法内部自动判断缓存是否今日
         macro_data = macro.format_for_push()
         result._macro_data = macro_data
         us_count = len(macro_data.get('us_market', {}).get('indices', []))
@@ -115,7 +114,7 @@ def main():
     print("\n📈 步骤2.6：市场数据采集...")
     try:
         market = MarketDataCollector(storage_dir="memory_data/")
-        # 自动判断是否今日已有数据
+        # ✅ 同样移除 force_refresh，内部自动判断缓存是否今日
         indices_data = market.get_indices()
         stats_data = market.get_market_stats()
         flow_data = market.get_sector_flow()
@@ -203,6 +202,7 @@ def main():
                 agent_result = agent.get_daily_summary()
                 result.agent_analysis = agent_result
                 print(f"   ✅ 智能代理分析完成，工具调用: {agent_result.get('tool_calls_made', 0)} 次")
+
                 stats = Bridge.get_stats()
                 print(f"   🔧 Bridge 统计: 成功率 {stats.get('success_rate', 0)}%")
             else:
