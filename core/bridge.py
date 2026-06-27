@@ -26,6 +26,13 @@ class Bridge:
         "get_historical_data",
         "generate_analysis_report",
         "fetch_webpage",  # ✅ 新增
+        "get_macro_snapshot",
+        "get_us_market",
+        "get_asia_market",
+        "get_europe_market",
+        "get_commodities",
+        "get_forex",
+        "get_a50_futures",
     ]
 
     FORBIDDEN_PATTERNS = [
