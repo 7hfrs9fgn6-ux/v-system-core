@@ -29,6 +29,7 @@ AK_CODE_MAP = {
 }
 
 CACHE_FILE = "memory_data/last_market_data.json"
+CACHE_TTL = 86400  # 24小时有效，但实际只检查是否为今日
 
 
 class RateLimiter:
@@ -98,48 +99,42 @@ class RealDataAdapter:
     def fetch_all(self) -> StandardMarketData:
         logger.info("🌐 开始获取数据...")
 
-        # ✅ post 阶段：完全使用缓存，不发起网络请求
-        if self.phase == "post":
-            cached = load_market_data()
-            if cached is not None:
-                logger.info("📂 post 阶段使用缓存市场数据")
-                self.data_source = "Cache"
-                return cached
-            else:
-                logger.warning("⚠️ post 阶段无缓存，使用模拟数据（避免网络超时）")
-                self.data_source = "Simulated"
-                return self._fetch_simulated()
-
-        # ✅ 其他阶段：正常获取
+        # ✅ 1. 优先尝试 AKShare（快速超时）
         try:
             logger.info("📊 使用 AKShare（主数据源）获取行业数据...")
             self.data_source = "AKShare"
             result = self._fetch_from_akshare()
-            # 保存缓存以供 post 使用
+            # 成功则保存缓存
             save_market_data(result)
             return result
         except Exception as e:
-            logger.warning(f"⚠️ AKShare 主流程失败 ({e})，尝试备用 Tushare...")
-            if self.use_tushare:
-                try:
-                    logger.info("📊 降级到 Tushare（备用数据源）...")
-                    self.data_source = "Tushare"
-                    result = self._fetch_from_tushare()
-                    save_market_data(result)
-                    return result
-                except Exception as e2:
-                    logger.warning(f"⚠️ Tushare 也失败 ({e2})，使用模拟值兜底")
-            # 如果都失败，尝试加载缓存
-            cached = load_market_data()
-            if cached is not None:
-                logger.warning("⚠️ 所有数据源失败，使用缓存数据")
-                self.data_source = "Cache"
-                return cached
-            self.data_source = "Simulated"
-            return self._fetch_simulated()
+            logger.warning(f"⚠️ AKShare 主流程失败 ({e})，尝试备用...")
+
+        # ✅ 2. 尝试 Tushare（如果配置）
+        if self.use_tushare:
+            try:
+                logger.info("📊 降级到 Tushare（备用数据源）...")
+                self.data_source = "Tushare"
+                result = self._fetch_from_tushare()
+                save_market_data(result)
+                return result
+            except Exception as e2:
+                logger.warning(f"⚠️ Tushare 也失败 ({e2})")
+
+        # ✅ 3. 自动回退到缓存（即使过期）
+        cached = load_market_data()
+        if cached is not None:
+            logger.warning("⚠️ 所有数据源失败，使用缓存数据")
+            self.data_source = "Cache"
+            return cached
+
+        # ✅ 4. 最终兜底：模拟值
+        logger.warning("⚠️ 无缓存可用，使用模拟值")
+        self.data_source = "Simulated"
+        return self._fetch_simulated()
 
     # --------------------------------------------------------------
-    # 以下方法与稳定版保持一致，仅添加 post 阶段特殊处理
+    # 以下方法与之前保持一致，仅调整超时时间
     # --------------------------------------------------------------
     def _get_target_date(self):
         phase_days_back = {"pre": 1, "intraday_a": 0, "intraday_b": 0, "post": 0, "night": 0}
@@ -224,10 +219,10 @@ class RealDataAdapter:
             for future in future_to_name:
                 name = future_to_name[future]
                 try:
-                    result = future.result(timeout=12)  # 缩短超时到12秒
+                    result = future.result(timeout=8)  # ⏱️ 缩短到 8 秒
                     sectors.append(result)
                 except FuturesTimeoutError:
-                    logger.warning(f"⚠️ {name} 获取超时（12s），使用随机值")
+                    logger.warning(f"⚠️ {name} 获取超时（8s），使用随机值")
                     sectors.append(self._make_fallback_sector(name))
                 except Exception as e:
                     logger.warning(f"⚠️ {name} 获取异常 ({e})，使用随机值")
