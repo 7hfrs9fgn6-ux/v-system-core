@@ -94,20 +94,24 @@ def main():
     if hasattr(market_data, '_index_data'):
         result._index_data = market_data._index_data
 
-    # ---------- 2.5 宏观数据采集（P1新增） ----------
-    print("\n🌐 步骤2.5：宏观数据采集...")
-    try:
-        from core.macro_collector import MacroCollector
-        macro = MacroCollector()
-        macro_data = macro.format_for_push()
-        result._macro_data = macro_data
-        # 统计获取到的数据
-        us_count = len(macro_data.get('us_market', {}).get('indices', []))
-        asia_count = len(macro_data.get('asia_market', {}).get('indices', []))
-        print(f"   ✅ 宏观数据获取完成: 美股{us_count}个指数, 亚太{asia_count}个指数")
-    except Exception as e:
-        print(f"   ⚠️ 宏观数据获取失败: {e}")
-        result._macro_data = {}
+ # ---------- 2.5 宏观数据采集 ----------
+print("\n🌐 步骤2.5：宏观数据采集...")
+# ✅ 只在 post 阶段刷新宏观数据，其他阶段使用缓存
+force_refresh = (args.phase == "post")
+try:
+    from core.macro_collector import MacroCollector
+    macro = MacroCollector()
+    macro_data = macro.format_for_push(force_refresh=force_refresh)
+    result._macro_data = macro_data
+    us_count = len(macro_data.get('us_market', {}).get('indices', []))
+    asia_count = len(macro_data.get('asia_market', {}).get('indices', []))
+    if force_refresh:
+        print(f"   ✅ 宏观数据已刷新: 美股{us_count}个指数, 亚太{asia_count}个指数")
+    else:
+        print(f"   ✅ 宏观数据已缓存读取: 美股{us_count}个指数, 亚太{asia_count}个指数")
+except Exception as e:
+    print(f"   ⚠️ 宏观数据获取失败: {e}")
+    result._macro_data = {}
 
         # ---------- 2.6 市场数据采集（P2新增） ----------
     print("\n📈 步骤2.6：市场数据采集...")
