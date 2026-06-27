@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-宏观数据采集模块（超时控制版）
+宏观数据采集模块（超时控制版 + 禁用tqdm）
 为每个数据获取任务设置 10 秒超时，防止卡死
+并禁用 akshare 内部的 tqdm 进度条，避免重复显示
 """
 
 import os
@@ -13,6 +14,9 @@ import concurrent.futures
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 
+# ✅ 禁用 tqdm 进度条（akshare 内部可能使用）
+os.environ['TQDM_DISABLE'] = '1'
+
 from core.macro_cache import MacroCache
 
 logger = logging.getLogger(__name__)
@@ -22,9 +26,10 @@ class MacroCollector:
     def __init__(self):
         self._cache = MacroCache()
         self._cache_ttl = 3600
-        self._retry_count = 2               # 重试次数减少（因为有超时）
+        self._retry_count = 2               # 重试次数
         self._retry_delay = [1, 2]          # 重试间隔
         self._timeout = 10                  # 每个任务超时秒数
+        logger.info(f"📁 宏观缓存目录: {self._cache.storage_dir}")
 
     # ---------- 通用辅助 ----------
     def _safe_float(self, value) -> Optional[float]:
@@ -72,7 +77,7 @@ class MacroCollector:
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(func, *args, **kwargs)
-                    result = future.result(timeout=self._timeout)   # 10秒超时
+                    result = future.result(timeout=self._timeout)
                 if result and not self._is_empty_result(result):
                     if cache_key:
                         self._save_cached_to_storage(cache_key, result)
@@ -133,8 +138,8 @@ class MacroCollector:
             'a50_futures': self._cache.save_a50_futures,
         }
         if key in methods:
-            methods[key](data)
-            logger.info(f"✅ {key} 已保存到存储缓存")
+            file_path = methods[key](data)  # 假设方法返回保存的路径
+            logger.info(f"✅ {key} 已保存到存储缓存: {file_path}")
 
     # ============================================================
     # 1. 美股市场
@@ -393,7 +398,7 @@ class MacroCollector:
                 if data.get('_cache_time'):
                     cache_time = datetime.fromisoformat(data['_cache_time'])
                     if (datetime.now() - cache_time).total_seconds() < 7200:
-                        logger.info("✅ 从存储缓存获取宏观快照")
+                        logger.info(f"✅ 从存储缓存获取宏观快照: {cache_file}")
                         return data.get('data', {})
             except:
                 pass
@@ -409,8 +414,9 @@ class MacroCollector:
         try:
             with open(cache_file, 'w') as f:
                 json.dump({'_cache_time': datetime.now().isoformat(), 'data': result}, f, ensure_ascii=False, indent=2)
-        except:
-            pass
+            logger.info(f"✅ 宏观快照已保存到: {cache_file}")
+        except Exception as e:
+            logger.warning(f"保存宏观快照失败: {e}")
         return result
 
     def format_for_push(self) -> Dict:
