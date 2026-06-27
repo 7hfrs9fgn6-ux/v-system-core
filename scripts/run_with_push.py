@@ -112,7 +112,22 @@ def main():
         print(f"   ✅ 分析完成，信任度: {result.trust_score:.2f}, 判断: {result.judge_status}")
         if hasattr(market_data, '_index_data'):
             result._index_data = market_data._index_data
-
+            
+    # ---------- 2.5 宏观数据采集（P1新增） ----------
+    print("\n🌐 步骤2.5：宏观数据采集...")
+    try:
+        from core.macro_collector import MacroCollector
+        macro = MacroCollector()
+        macro_data = macro.format_for_push()
+        result._macro_data = macro_data
+        # 统计获取到的数据
+        us_count = len(macro_data.get('us_market', {}).get('indices', []))
+        asia_count = len(macro_data.get('asia_market', {}).get('indices', []))
+        print(f"   ✅ 宏观数据获取完成: 美股{us_count}个指数, 亚太{asia_count}个指数")
+    except Exception as e:
+        print(f"   ⚠️ 宏观数据获取失败: {e}")
+        result._macro_data = {}
+        
     # ---------- 3. 烈度评分 ----------
     print("\n📰 步骤3：消息面烈度评分...")
     sentiment_config = config.get('sentiment', {})
