@@ -1,71 +1,42 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Codex - 工具执行层（手脚）- 增强版
-新增：网页抓取工具（fetch_webpage）
-对应精阶段 V1.1.50 智能代理架构
+Codex - 工具执行层（手脚）
+包含 17 个工具函数：
+  原有工具（10个）：行情、回撤、市场环境、北向、烈度、持仓、极端、历史、报告、网页抓取
+  P0新增工具（7个）：宏观快照、美股、亚太、欧洲、大宗商品、汇率、A50期货
 """
 
 import os
 import logging
 import json
-import time
 import requests
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 
-# 在文件顶部导入 MacroCollector
-from core.macro_collector import MacroCollector
-
-# 创建全局实例
-_macro_collector = MacroCollector()
-
-# 新增宏观工具函数
-def get_macro_snapshot(self) -> Dict:
-    """获取完整的宏观数据快照（美股、亚太、欧洲、大宗商品、汇率、A50期货）"""
-    return _macro_collector.get_macro_snapshot()
-
-def get_us_market(self) -> Dict:
-    """获取美股市场数据（三大指数、费城半导体、科技巨头）"""
-    return _macro_collector.get_us_market()
-
-def get_asia_market(self) -> Dict:
-    """获取亚太市场数据（日经、韩国、恒生、台湾）"""
-    return _macro_collector.get_asia_market()
-
-def get_europe_market(self) -> Dict:
-    """获取欧洲市场数据（德国DAX、英国FTSE、法国CAC）"""
-    return _macro_collector.get_europe_market()
-
-def get_commodities(self) -> Dict:
-    """获取大宗商品数据（WTI原油、布伦特原油、黄金）"""
-    return _macro_collector.get_commodities()
-
-def get_forex(self) -> Dict:
-    """获取人民币汇率数据"""
-    return _macro_collector.get_forex()
-
-def get_a50_futures(self) -> Dict:
-    """获取A50期货夜盘数据"""
-    return _macro_collector.get_a50_futures()
-    
-# ✅ 新增：网页解析库
+# 尝试导入网页解析库
 try:
     from bs4 import BeautifulSoup
 except ImportError:
     BeautifulSoup = None
     logging.warning("⚠️ beautifulsoup4 未安装，网页抓取工具不可用")
 
+# P0阶段新增：导入宏观采集器
+from core.macro_collector import MacroCollector
+
 logger = logging.getLogger(__name__)
 
 
 class CodexTools:
-    """Codex 工具执行层"""
+    """Codex 工具执行层 - 所有工具函数"""
 
     def __init__(self):
         self.tushare_token = os.environ.get("TUSHARE_TOKEN")
         self._ts_pro = None
         self._init_tushare()
+        # P0阶段新增：宏观采集器实例
+        self._macro = MacroCollector()
 
     def _init_tushare(self):
         if self.tushare_token:
@@ -77,8 +48,10 @@ class CodexTools:
                 pass
 
     # ============================================================
-    # 工具1：获取板块行情
+    # 原有工具（1-10）
     # ============================================================
+
+    # 工具1：获取板块行情
     def get_sector_quote(self, sector_name: str) -> Dict:
         try:
             import akshare as ak
@@ -102,9 +75,7 @@ class CodexTools:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-    # ============================================================
     # 工具2：计算52周回撤
-    # ============================================================
     def calculate_drawdown(self, sector_name: str) -> Dict:
         try:
             import akshare as ak
@@ -134,9 +105,7 @@ class CodexTools:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-    # ============================================================
     # 工具3：获取市场环境
-    # ============================================================
     def get_market_environment(self) -> Dict:
         try:
             import akshare as ak
@@ -159,9 +128,7 @@ class CodexTools:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-    # ============================================================
     # 工具4：获取北向资金
-    # ============================================================
     def get_north_flow(self) -> Dict:
         try:
             import akshare as ak
@@ -179,9 +146,7 @@ class CodexTools:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-    # ============================================================
     # 工具5：获取烈度评分
-    # ============================================================
     def get_sentiment_score(self, sector_name: str) -> Dict:
         try:
             from core.sentiment_engine import SentimentEngine
@@ -198,9 +163,7 @@ class CodexTools:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-    # ============================================================
     # 工具6：获取持仓信号
-    # ============================================================
     def get_holding_signal(self, fund_code: str) -> Dict:
         try:
             import yaml
@@ -235,9 +198,7 @@ class CodexTools:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-    # ============================================================
     # 工具7：获取最强/最弱板块
-    # ============================================================
     def get_extreme_sectors(self) -> Dict:
         try:
             sector_names = self._get_all_sectors()
@@ -263,9 +224,7 @@ class CodexTools:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-    # ============================================================
     # 工具8：获取历史数据
-    # ============================================================
     def get_historical_data(self, sector_name: str, days: int = 30) -> Dict:
         try:
             import akshare as ak
@@ -288,9 +247,7 @@ class CodexTools:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-    # ============================================================
     # 工具9：生成分析报告
-    # ============================================================
     def generate_analysis_report(self, sector_name: str) -> Dict:
         try:
             quote = self.get_sector_quote(sector_name)
@@ -307,47 +264,26 @@ class CodexTools:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-    # ============================================================
-    # ✅ 工具10：网页抓取（新增）
-    # ============================================================
+    # 工具10：网页抓取（原有）
     def fetch_webpage(self, url: str) -> Dict:
-        """
-        获取指定网页的内容（纯文本）
-        用于获取新闻、公告、研报等外部信息
-        """
         if BeautifulSoup is None:
             return {
                 "status": "error",
                 "error": "beautifulsoup4 未安装，请运行: pip install beautifulsoup4 lxml"
             }
-
         try:
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
             resp = requests.get(url, headers=headers, timeout=15)
-            
             if resp.status_code != 200:
-                return {
-                    "status": "error",
-                    "error": f"HTTP {resp.status_code}",
-                    "url": url
-                }
-
-            # 解析 HTML
+                return {"status": "error", "error": f"HTTP {resp.status_code}", "url": url}
             soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            # 移除 script 和 style 标签
             for script in soup(["script", "style", "noscript", "meta", "link"]):
                 script.decompose()
-            
-            # 提取文本
             text = soup.get_text(separator='\n')
-            
-            # 清理多余空白
             lines = [line.strip() for line in text.splitlines() if line.strip()]
-            content = '\n'.join(lines[:200])  # 限制 200 行，避免太长
-            
+            content = '\n'.join(lines[:200])
             return {
                 "status": "success",
                 "url": url,
@@ -356,16 +292,78 @@ class CodexTools:
                 "line_count": len(lines[:200]),
                 "data_source": "Web"
             }
-            
-        except requests.exceptions.Timeout:
-            return {"status": "error", "error": "请求超时", "url": url}
-        except requests.exceptions.ConnectionError:
-            return {"status": "error", "error": "连接失败", "url": url}
         except Exception as e:
             return {"status": "error", "error": str(e), "url": url}
 
     # ============================================================
-    # 辅助方法
+    # P0阶段新增宏观工具（11-17）
+    # ============================================================
+
+    # 工具11：宏观快照（一次性获取所有宏观数据）
+    def get_macro_snapshot(self) -> Dict:
+        """获取完整的宏观数据快照（美股、亚太、欧洲、大宗、汇率、A50期货）"""
+        try:
+            result = self._macro.get_macro_snapshot()
+            return {"status": "success", "data": result, "data_source": "MacroCollector"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    # 工具12：美股市场
+    def get_us_market(self) -> Dict:
+        """获取美股市场数据（三大指数、费城半导体、科技巨头）"""
+        try:
+            result = self._macro.get_us_market()
+            return {"status": "success", "data": result, "data_source": "MacroCollector"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    # 工具13：亚太市场
+    def get_asia_market(self) -> Dict:
+        """获取亚太市场数据（日经、韩国、恒生、台湾）"""
+        try:
+            result = self._macro.get_asia_market()
+            return {"status": "success", "data": result, "data_source": "MacroCollector"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    # 工具14：欧洲市场
+    def get_europe_market(self) -> Dict:
+        """获取欧洲市场数据（德国DAX、英国FTSE、法国CAC）"""
+        try:
+            result = self._macro.get_europe_market()
+            return {"status": "success", "data": result, "data_source": "MacroCollector"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    # 工具15：大宗商品
+    def get_commodities(self) -> Dict:
+        """获取大宗商品数据（WTI原油、布伦特原油、黄金）"""
+        try:
+            result = self._macro.get_commodities()
+            return {"status": "success", "data": result, "data_source": "MacroCollector"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    # 工具16：汇率
+    def get_forex(self) -> Dict:
+        """获取人民币汇率数据（在岸价、中间价）"""
+        try:
+            result = self._macro.get_forex()
+            return {"status": "success", "data": result, "data_source": "MacroCollector"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    # 工具17：A50期货
+    def get_a50_futures(self) -> Dict:
+        """获取A50期货夜盘数据"""
+        try:
+            result = self._macro.get_a50_futures()
+            return {"status": "success", "data": result, "data_source": "MacroCollector"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    # ============================================================
+    # 辅助方法（不变）
     # ============================================================
     def _get_sector_code(self, sector_name: str) -> Optional[str]:
         code_map = {
@@ -415,11 +413,12 @@ class CodexTools:
 
 
 # ============================================================
-# 工具注册表
+# 工具注册表（包含全部 17 个工具）
 # ============================================================
 tools_instance = CodexTools()
 
 TOOL_REGISTRY = {
+    # ---- 原有工具 ----
     "get_sector_quote": {
         "name": "get_sector_quote",
         "description": "获取指定板块的实时行情数据（价格、涨跌幅）",
@@ -474,7 +473,6 @@ TOOL_REGISTRY = {
         "parameters": {"type": "object", "properties": {"sector_name": {"type": "string"}}, "required": ["sector_name"]},
         "function": tools_instance.generate_analysis_report
     },
-    # ✅ 新增工具10：网页抓取
     "fetch_webpage": {
         "name": "fetch_webpage",
         "description": "抓取指定URL的网页内容，提取纯文本信息。用于获取新闻、公告、研报等外部信息",
@@ -486,6 +484,49 @@ TOOL_REGISTRY = {
             "required": ["url"]
         },
         "function": tools_instance.fetch_webpage
+    },
+    # ---- P0阶段新增宏观工具 ----
+    "get_macro_snapshot": {
+        "name": "get_macro_snapshot",
+        "description": "获取完整的宏观数据快照，包括美股、亚太、欧洲、大宗商品、汇率、A50期货。用于盘前预测和夜间预测的宏观分析。",
+        "parameters": {"type": "object", "properties": {}},
+        "function": tools_instance.get_macro_snapshot
+    },
+    "get_us_market": {
+        "name": "get_us_market",
+        "description": "获取美股市场数据，包括道指、纳指、标普500、费城半导体指数、科技巨头（苹果、英伟达等）",
+        "parameters": {"type": "object", "properties": {}},
+        "function": tools_instance.get_us_market
+    },
+    "get_asia_market": {
+        "name": "get_asia_market",
+        "description": "获取亚太市场数据，包括日经225、韩国KOSPI、恒生指数、台湾加权指数",
+        "parameters": {"type": "object", "properties": {}},
+        "function": tools_instance.get_asia_market
+    },
+    "get_europe_market": {
+        "name": "get_europe_market",
+        "description": "获取欧洲市场数据，包括德国DAX、英国富时100、法国CAC40",
+        "parameters": {"type": "object", "properties": {}},
+        "function": tools_instance.get_europe_market
+    },
+    "get_commodities": {
+        "name": "get_commodities",
+        "description": "获取大宗商品数据，包括WTI原油、布伦特原油、黄金",
+        "parameters": {"type": "object", "properties": {}},
+        "function": tools_instance.get_commodities
+    },
+    "get_forex": {
+        "name": "get_forex",
+        "description": "获取人民币汇率数据，包括在岸价、离岸价、中间价",
+        "parameters": {"type": "object", "properties": {}},
+        "function": tools_instance.get_forex
+    },
+    "get_a50_futures": {
+        "name": "get_a50_futures",
+        "description": "获取A50期货夜盘数据，用于预判A股次日开盘",
+        "parameters": {"type": "object", "properties": {}},
+        "function": tools_instance.get_a50_futures
     }
 }
 
