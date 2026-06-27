@@ -117,7 +117,9 @@ relative_strength:
 memory:
   enabled: true
   storage_dir: "memory_data/"
-  max_records: 1000
+  max_active_records: 1000        # 热数据最大条数（最近活跃数据）
+  archive_threshold: 500          # 每次归档移动的条数
+  max_archive_files: 20           # 最多保留20个归档文件（约覆盖3年以上）
   tables:
     signals: "signal_history.csv"
     shadow: "shadow_history.csv"
