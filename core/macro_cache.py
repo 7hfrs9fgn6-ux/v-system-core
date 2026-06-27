@@ -4,6 +4,7 @@
 宏观数据缓存模块（记忆体集成版）
 将宏观历史数据存储到 memory_data/ 目录
 每次只获取增量更新，大幅提升速度
+所有 save_* 方法均返回保存的文件路径
 """
 
 import os
@@ -50,14 +51,16 @@ class MacroCache:
         return None
 
     def _save_json(self, filename: str, data: Dict) -> str:
-        """保存 JSON 文件，返回文件路径"""
+        """
+        保存 JSON 文件，返回文件路径
+        """
         file_path = self._get_file_path(filename)
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return file_path
 
     def _is_cache_valid(self, cache_time: str) -> bool:
-        """检查缓存是否在有效期内"""
+        """检查缓存是否在有效期内（2小时）"""
         if not cache_time:
             return False
         try:
@@ -163,9 +166,18 @@ class MacroCache:
             json.dump({'last_update': datetime.now().isoformat()}, f)
 
     def clear_all_cache(self):
+        """清空所有缓存文件"""
         for file in os.listdir(self.storage_dir):
             if file.startswith('macro_') and file.endswith('.json'):
                 os.remove(os.path.join(self.storage_dir, file))
         if os.path.exists(self._last_update_file):
             os.remove(self._last_update_file)
         logger.info("✅ 宏观缓存已全部清空")
+
+    def list_cache_files(self) -> List[str]:
+        """列出所有缓存文件"""
+        files = []
+        for f in os.listdir(self.storage_dir):
+            if f.startswith('macro_') and f.endswith('.json'):
+                files.append(f)
+        return files
