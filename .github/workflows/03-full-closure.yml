@@ -22,6 +22,7 @@ concurrency:
 env:
   TZ: Asia/Shanghai
   PYTHON_VERSION: '3.11'
+  # 全部密钥
   PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
   TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
   DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -34,10 +35,12 @@ env:
 jobs:
   daily-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
       - name: ① 检出代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # ✅ 获取完整历史，便于提交
 
       - name: ② 设置 Python
         uses: actions/setup-python@v5
@@ -65,7 +68,25 @@ jobs:
         run: |
           python scripts/run_with_push.py --phase ${{ steps.get_phase.outputs.phase }}
 
-      - name: ⑦ 上传宏观缓存（可选，供下载）
+      - name: ⑦ 自动提交并推送 memory_data 变更
+        if: always()
+        run: |
+          # 配置git用户
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 检查memory_data目录是否有变更
+          if [ -d "memory_data" ] && git status --porcelain memory_data/ | grep -q .; then
+            echo "📁 检测到 memory_data 目录有变更，准备提交..."
+            git add memory_data/
+            git commit -m "自动更新记忆体数据 [$(date '+%Y-%m-%d %H:%M:%S')]"
+            git push
+            echo "✅ 记忆体数据已自动提交并推送"
+          else
+            echo "📁 memory_data 目录无变更或不存在，跳过提交"
+          fi
+
+      - name: ⑧ 上传宏观缓存（备选下载方案）
         uses: actions/upload-artifact@v4
         with:
           name: macro-cache
@@ -73,7 +94,7 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      - name: ⑧ 输出摘要
+      - name: ⑨ 输出摘要
         run: |
           echo "### 📲 V系统推送摘要" >> $GITHUB_STEP_SUMMARY
           echo "时间: $(date '+%Y-%m-%d %H:%M:%S') (北京时间)" >> $GITHUB_STEP_SUMMARY
