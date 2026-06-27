@@ -1,0 +1,45 @@
+{
+  "_cache_time": "2026-06-27T15:39:59.032700",
+  "data": {
+    "us_market": {
+      "indices": {},
+      "semiconductor": {},
+      "tech_giants": {},
+      "oil": {},
+      "gold": {},
+      "usd_cny": {},
+      "price": null,
+      "pct_change": null,
+      "data_source": "empty",
+      "timestamp": "2026-06-27T15:39:59.030186"
+    },
+    "asia_market": {
+      "indices": {},
+      "data_source": "AKShare",
+      "timestamp": "2026-06-27T15:39:59.030464"
+    },
+    "europe_market": {
+      "indices": {},
+      "data_source": "AKShare",
+      "timestamp": "2026-06-27T15:39:59.031061"
+    },
+    "commodities": {
+      "oil": {},
+      "gold": {},
+      "data_source": "AKShare",
+      "timestamp": "2026-06-27T15:39:59.031601"
+    },
+    "forex": {
+      "usd_cny": {},
+      "data_source": "AKShare",
+      "timestamp": "2026-06-27T15:39:59.031999"
+    },
+    "a50_futures": {
+      "price": null,
+      "pct_change": null,
+      "data_source": "AKShare",
+      "timestamp": "2026-06-27T15:39:59.032419"
+    },
+    "timestamp": "2026-06-27T15:39:59.032642"
+  }
+}

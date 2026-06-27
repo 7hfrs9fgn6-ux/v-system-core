@@ -1,0 +1,3 @@
+date,time,phase,overall_reliability,consensus_level,is_reliable,divergence_sectors
+2026-06-27,2026-06-27T15:40:14.247607,post,0.96,高,True,"['家用电器', '石油石化', '计算机']"
+2026-06-27,2026-06-27T15:41:02.158890,pre,0.96,高,True,"['家用电器', '石油石化', '计算机']"
