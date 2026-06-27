@@ -132,14 +132,13 @@ class PushNotifier:
             print(f"❌ Notion 存储失败: {e}")
 
     # ============================================================
-    # P3：研报级推送格式
+    # 主格式化入口
     # ============================================================
     def _format_message(self, result: SignalResult, phase: str) -> str:
-        """P3升级：使用研报级格式"""
         if phase == "night":
             return self._format_night_message(result)
 
-        # ✅ P3：如果 Agent 已生成研报级内容，直接展示
+        # ✅ P3：如果 Agent 已生成研报级内容，使用研报格式
         if hasattr(result, 'agent_analysis') and result.agent_analysis:
             agent_data = result.agent_analysis
             if agent_data.get('status') == 'success' or agent_data.get('status') == 'warning':
@@ -148,8 +147,10 @@ class PushNotifier:
         # 降级：使用 P2 正常格式
         return self._format_p2_normal(result, phase)
 
+    # ============================================================
+    # P3 研报级格式（过滤内部思考过程）
+    # ============================================================
     def _format_p3_report(self, result: SignalResult, phase: str) -> str:
-        """P3研报级格式展示"""
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         phase_text = phase_info.get("name", phase)
         emoji = phase_info.get("emoji", "📊")
@@ -170,6 +171,8 @@ class PushNotifier:
                 lines.append("   └─ 强势上涨，市场偏暖")
             elif self._index_pct < -1:
                 lines.append("   └─ 明显回调，注意风险")
+            else:
+                lines.append("   └─ 小幅波动，正常整理")
 
         # 涨跌家数
         if self._market_stats:
@@ -186,39 +189,35 @@ class PushNotifier:
                     status = "🔴 普跌"
                 lines.append(f"【📊 涨跌家数】{status} | 上涨{up}家 / 下跌{down}家")
 
-        # ✅ P3核心：智能代理研报级分析
+        # ✅ 核心：Agent 研报内容（过滤思考过程）
         if hasattr(result, 'agent_analysis') and result.agent_analysis:
             agent_data = result.agent_analysis
             response = agent_data.get('response', '')
             if response:
-                # 解析并美化 Agent 生成的内容
-                lines.append("")
-                lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                # 按段落分割，保持结构
-                paragraphs = response.split('\n\n')
-                for para in paragraphs:
-                    if para.strip():
-                        # 如果段落以 # 开头，作为标题
-                        if para.startswith('#'):
-                            # 提取标题内容
-                            title = para.lstrip('#').strip()
-                            lines.append(f"【{title}】")
-                        else:
-                            # 普通段落，缩进显示
-                            for line in para.split('\n'):
-                                if line.strip():
-                                    lines.append(f"  {line.strip()}")
-                lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                # 过滤内部思考
+                cleaned_response = self._clean_agent_response(response)
+                if cleaned_response:
+                    lines.append("")
+                    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    # 按段落分割
+                    paragraphs = cleaned_response.split('\n\n')
+                    for para in paragraphs:
+                        if para.strip():
+                            if para.startswith('#'):
+                                title = para.lstrip('#').strip()
+                                lines.append(f"【{title}】")
+                            else:
+                                for line in para.split('\n'):
+                                    if line.strip():
+                                        # 跳过表格分隔线
+                                        if line.strip().startswith('|') and '---' in line:
+                                            continue
+                                        lines.append(f"  {line.strip()}")
+                    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        # 工具调用信息
-        if hasattr(result, 'agent_analysis') and result.agent_analysis:
-            agent_data = result.agent_analysis
-            tool_calls = agent_data.get('tool_calls_made', 0)
-            if tool_calls > 0:
-                lines.append("")
-                lines.append(f"📊 基于 {tool_calls} 个数据源分析")
+        # ✅ 不显示工具调用次数、告警等内部信息
 
-        # 操作建议
+        # 操作建议（仅显示判断状态）
         lines.append("")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         lines.append("【📌 操作建议】")
@@ -228,18 +227,74 @@ class PushNotifier:
             lines.append("  🟡 系统判断参考价值有限，建议结合其他信息确认")
         else:
             lines.append("  🔴 系统判断不可靠，建议暂停决策")
-
-        if result.warnings:
-            lines.append("")
-            lines.append("【⚠️ 系统提示】")
-            for w in result.warnings[:3]:
-                lines.append(f"  ⚠️ {w}")
-
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         return "\n".join(lines)
 
+    def _clean_agent_response(self, response: str) -> str:
+        """
+        过滤掉 Agent 的内部思考过程（如“好的，现在我来...”）
+        只保留真正的分析内容
+        """
+        # 需要过滤的关键词（中英文）
+        filter_patterns = [
+            "好的，现在我来",
+            "现在我来获取",
+            "接下来我来",
+            "让我来",
+            "我先",
+            "我们开始",
+            "获取更多补充数据",
+            "data already collected",
+            "now I will",
+            "let me",
+            "I'll get",
+            "I will",
+            "proceeding to",
+            "starting to",
+            "going to fetch",
+            "will now",
+            "going to get",
+            "before I continue",
+            "let's proceed",
+            "I'm going to",
+            "接下来我将",
+            "现在开始",
+            "我先获取",
+        ]
+
+        lines = response.split('\n')
+        cleaned_lines = []
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            # 跳过内部思考行
+            skip = False
+            for pattern in filter_patterns:
+                if pattern in stripped:
+                    skip = True
+                    break
+            if skip:
+                continue
+
+            # 跳过纯分隔符
+            if stripped in ['---', '***', '___', '===']:
+                continue
+
+            # 跳过只有几个字的无意义句子
+            if len(stripped) < 5 and stripped in ['好的', 'OK', 'ok', 'yes', '是']:
+                continue
+
+            cleaned_lines.append(line)
+
+        return '\n'.join(cleaned_lines)
+
+    # ============================================================
+    # P2 正常格式（降级备用）
+    # ============================================================
     def _format_p2_normal(self, result: SignalResult, phase: str) -> str:
-        """P2正常格式（保留作为降级）"""
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         phase_text = phase_info.get("name", phase)
         emoji = phase_info.get("emoji", "📊")
@@ -256,12 +311,40 @@ class PushNotifier:
             arrow = "📈" if self._index_pct > 0 else "📉" if self._index_pct < 0 else "➡️"
             lines.append(f"【📊 上证指数】{self._index_close:.2f}  {arrow} {self._index_pct:+.2f}%")
 
-        # 简化版持仓信号
+        lines.append("")
+        lines.append("【💡 今日核心建议】")
+        suggestion = result.overall_suggestion
+        if suggestion == "偏多":
+            lines.append(f"   📌 方向判断：看好后市（偏多）")
+        elif suggestion == "偏空":
+            lines.append(f"   📌 方向判断：看淡后市（偏空）")
+        else:
+            lines.append(f"   📌 方向判断：震荡整理")
+
+        judge = result.judge_status
+        trust = result.trust_score
+        if judge == "正常":
+            lines.append(f"   📊 可信度：🟢 可信（信任度 {trust:.2f}）")
+        elif judge == "偏低":
+            lines.append(f"   📊 可信度：🟡 偏低（信任度 {trust:.2f}）")
+        else:
+            lines.append(f"   📊 可信度：🟠 需谨慎（信任度 {trust:.2f}）")
+
+        mode = result.agent_mode
+        if mode == "AI分析":
+            lines.append(f"   🤖 模式：AI智能分析（推荐）")
+        elif mode == "规则分析":
+            lines.append(f"   ⚙️  模式：规则分析（数据不足，AI暂未启用）")
+        else:
+            lines.append(f"   ⚠️  模式：AI已暂停（系统保守运行）")
+
+        # 持仓信号（去重）
         lines.append("")
         lines.append("【📌 你的持仓信号】")
         seen_sectors = set()
         unique_holdings = []
         for fund_code, fund_info in self.holding_map.items():
+            fund_name = fund_info["name"]
             sectors = fund_info["sectors"]
             for sec in sectors:
                 if sec in seen_sectors:
@@ -295,22 +378,26 @@ class PushNotifier:
             lines.append("【🤖 AI 点评】")
             lines.append(f"  {ai_comment}")
 
-        # Agent分析（简短）
+        # Agent分析（仅限研报内容，不显示内部信息）
         if hasattr(result, 'agent_analysis') and result.agent_analysis:
             agent_data = result.agent_analysis
             response = agent_data.get('response', '')
             if response:
-                lines.append("")
-                lines.append("【🧠 智能代理分析】")
-                if len(response) > 300:
-                    response = response[:300] + "..."
-                lines.append(f"  {response}")
+                cleaned = self._clean_agent_response(response)
+                if cleaned:
+                    lines.append("")
+                    lines.append("【🧠 智能代理分析】")
+                    for line in cleaned.split('\n')[:10]:
+                        if line.strip():
+                            lines.append(f"  {line.strip()}")
 
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         return "\n".join(lines)
 
+    # ============================================================
+    # 夜间预测格式
+    # ============================================================
     def _format_night_message(self, result: SignalResult) -> str:
-        """夜间预测格式（保持原样）"""
         phase_info = self.phase_config.get("night", {"name": "夜间预测", "emoji": "🌙"})
         phase_text = phase_info.get("name", "夜间预测")
         emoji = phase_info.get("emoji", "🌙")
@@ -343,11 +430,13 @@ class PushNotifier:
             agent_data = result.agent_analysis
             response = agent_data.get('response', '')
             if response:
-                lines.append("")
-                lines.append("【🧠 晚间消息汇总】")
-                if len(response) > 200:
-                    response = response[:200] + "..."
-                lines.append(f"  {response}")
+                cleaned = self._clean_agent_response(response)
+                if cleaned:
+                    lines.append("")
+                    lines.append("【🧠 晚间消息汇总】")
+                    for line in cleaned.split('\n')[:8]:
+                        if line.strip():
+                            lines.append(f"  {line.strip()}")
 
         lines.append("")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
