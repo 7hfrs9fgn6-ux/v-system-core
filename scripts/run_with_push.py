@@ -94,45 +94,41 @@ def main():
     if hasattr(market_data, '_index_data'):
         result._index_data = market_data._index_data
 
-    # ---------- 2.5 宏观数据采集 ----------
-    print("\n🌐 步骤2.5：宏观数据采集...")
-    # ✅ post 阶段强制刷新，其他阶段使用缓存
-    force_refresh = (args.phase == "post")
-    try:
-        from core.macro_collector import MacroCollector
-        macro = MacroCollector()
-        macro_data = macro.format_for_push(force_refresh=force_refresh)
-        result._macro_data = macro_data
-        us_count = len(macro_data.get('us_market', {}).get('indices', []))
-        asia_count = len(macro_data.get('asia_market', {}).get('indices', []))
-        if force_refresh:
-            print(f"   ✅ 宏观数据已刷新: 美股{us_count}个指数, 亚太{asia_count}个指数")
-        else:
-            print(f"   ✅ 宏观数据已缓存读取: 美股{us_count}个指数, 亚太{asia_count}个指数")
-    except Exception as e:
-        print(f"   ⚠️ 宏观数据获取失败: {e}")
-        result._macro_data = {}
+# ---------- 2.5 宏观数据采集 ----------
+print("\n🌐 步骤2.5：宏观数据采集...")
+try:
+    from core.macro_collector import MacroCollector
+    macro = MacroCollector()
+    # ✅ 移除 force_refresh 参数
+    macro_data = macro.format_for_push()
+    result._macro_data = macro_data
+    us_count = len(macro_data.get('us_market', {}).get('indices', []))
+    asia_count = len(macro_data.get('asia_market', {}).get('indices', []))
+    print(f"   ✅ 宏观数据: 美股{us_count}个指数, 亚太{asia_count}个指数")
+except Exception as e:
+    print(f"   ⚠️ 宏观数据获取失败: {e}")
+    result._macro_data = {}
 
-    # ---------- 2.6 市场数据采集 ----------
-    print("\n📈 步骤2.6：市场数据采集...")
-    try:
-        market = MarketDataCollector(storage_dir="memory_data/")
-        # post 阶段强制刷新，其他阶段使用缓存
-        force_refresh_market = (args.phase == "post")
-        indices_data = market.get_indices(force_refresh=force_refresh_market)
-        stats_data = market.get_market_stats(force_refresh=force_refresh_market)
-        flow_data = market.get_sector_flow(force_refresh=force_refresh_market)
-        result._indices = indices_data
-        result._market_stats = stats_data
-        result._sector_flow = flow_data
-        print(f"   ✅ 获取到 {len(indices_data.get('indices', {}))} 个指数数据")
-        print(f"   📊 涨跌: {stats_data.get('up',0)}涨 / {stats_data.get('down',0)}跌")
-        print(f"   💰 流入TOP5: {len(flow_data.get('net_inflow_top5', []))}个板块")
-    except Exception as e:
-        print(f"   ⚠️ 市场数据采集失败: {e}")
-        result._indices = {}
-        result._market_stats = {}
-        result._sector_flow = {}
+# ---------- 2.6 市场数据采集 ----------
+print("\n📈 步骤2.6：市场数据采集...")
+try:
+    from data_adapter.market_data import MarketDataCollector
+    market = MarketDataCollector(storage_dir="memory_data/")
+    # ✅ 移除所有 force_refresh 参数
+    indices_data = market.get_indices()
+    stats_data = market.get_market_stats()
+    flow_data = market.get_sector_flow()
+    result._indices = indices_data
+    result._market_stats = stats_data
+    result._sector_flow = flow_data
+    print(f"   ✅ 获取到 {len(indices_data.get('indices', {}))} 个指数数据")
+    print(f"   📊 涨跌: {stats_data.get('up',0)}涨 / {stats_data.get('down',0)}跌")
+    print(f"   💰 流入TOP5: {len(flow_data.get('net_inflow_top5', []))}个板块")
+except Exception as e:
+    print(f"   ⚠️ 市场数据采集失败: {e}")
+    result._indices = {}
+    result._market_stats = {}
+    result._sector_flow = {}
 
     # ---------- 3. 烈度评分 ----------
     print("\n📰 步骤3：消息面烈度评分...")
