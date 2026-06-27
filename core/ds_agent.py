@@ -28,7 +28,7 @@ class DSAgent:
         self.api_key = os.environ.get("DEEPSEEK_API_KEY")
         self.base_url = "https://api.deepseek.com/v1"
         self.enabled = bool(self.api_key and self.api_key != "")
-        self.max_tool_calls = 10
+        self.max_tool_calls = 15
         self.max_reasoning_depth = 5
         self.timeout = 30
 
