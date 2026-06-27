@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-宏观数据采集模块（超时控制版 + 禁用tqdm）
-为每个数据获取任务设置 10 秒超时，防止卡死
-并禁用 akshare 内部的 tqdm 进度条，避免重复显示
+宏观数据采集模块（优化版）
+- 减少重试次数，缩短超时时间
+- 缓存优先，避免重复网络请求
+- 彻底禁用 tqdm 进度条
 """
 
 import os
@@ -14,7 +15,7 @@ import concurrent.futures
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 
-# ✅ 禁用 tqdm 进度条（akshare 内部可能使用）
+# ✅ 在导入 akshare 之前禁用 tqdm
 os.environ['TQDM_DISABLE'] = '1'
 
 from core.macro_cache import MacroCache
@@ -26,9 +27,9 @@ class MacroCollector:
     def __init__(self):
         self._cache = MacroCache()
         self._cache_ttl = 3600
-        self._retry_count = 2               # 重试次数
-        self._retry_delay = [1, 2]          # 重试间隔
-        self._timeout = 10                  # 每个任务超时秒数
+        self._retry_count = 1               # ✅ 从2次减为1次
+        self._retry_delay = [2]             # 重试等待2秒
+        self._timeout = 8                   # ✅ 从10秒减为8秒
         logger.info(f"📁 宏观缓存目录: {self._cache.storage_dir}")
 
     # ---------- 通用辅助 ----------
@@ -63,17 +64,18 @@ class MacroCollector:
             "timestamp": datetime.now().isoformat()
         }
 
-    # ---------- 核心安全获取（带超时） ----------
+    # ---------- 核心安全获取（缓存优先，减少重试） ----------
     def _safe_fetch(self, func, cache_key: str = None, *args, **kwargs) -> Any:
-        # 1. 尝试从存储缓存读取（优先）
+        # 1. 尝试从存储缓存读取（优先，0网络请求）
         if cache_key:
             cached_data = self._get_cached_from_storage(cache_key)
             if cached_data is not None and not self._is_empty_result(cached_data):
                 logger.info(f"✅ 从存储缓存获取 {cache_key}")
                 return cached_data
 
-        # 2. 实时获取（带超时）
-        for attempt in range(self._retry_count):
+        # 2. 实时获取（带超时，仅1次重试）
+        last_error = None
+        for attempt in range(self._retry_count + 1):  # 0, 1
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(func, *args, **kwargs)
@@ -83,13 +85,21 @@ class MacroCollector:
                         self._save_cached_to_storage(cache_key, result)
                     return result
             except concurrent.futures.TimeoutError:
-                logger.warning(f"⏰ {cache_key} 获取超时 ({self._timeout}s)，尝试重试 ({attempt+1}/{self._retry_count})")
-                continue
-            except Exception as e:
-                logger.warning(f"⚠️ {cache_key} 获取异常: {e}，尝试重试 ({attempt+1}/{self._retry_count})")
-                if attempt < self._retry_count - 1:
+                last_error = f"超时 ({self._timeout}s)"
+                if attempt < self._retry_count:
+                    logger.warning(f"⏰ {cache_key} 超时，等待 {self._retry_delay[attempt]}s 后重试")
                     time.sleep(self._retry_delay[attempt])
-                continue
+                    continue
+                else:
+                    logger.warning(f"⏰ {cache_key} 超时，放弃")
+            except Exception as e:
+                last_error = str(e)
+                if attempt < self._retry_count:
+                    logger.warning(f"⚠️ {cache_key} 异常: {e}，等待 {self._retry_delay[attempt]}s 后重试")
+                    time.sleep(self._retry_delay[attempt])
+                    continue
+                else:
+                    logger.warning(f"⚠️ {cache_key} 异常，放弃")
 
         # 3. 获取失败，使用过期缓存（即使过期）
         if cache_key:
@@ -138,7 +148,7 @@ class MacroCollector:
             'a50_futures': self._cache.save_a50_futures,
         }
         if key in methods:
-            file_path = methods[key](data)  # 假设方法返回保存的路径
+            file_path = methods[key](data)
             logger.info(f"✅ {key} 已保存到存储缓存: {file_path}")
 
     # ============================================================
