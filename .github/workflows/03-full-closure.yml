@@ -65,16 +65,17 @@ jobs:
         run: |
           python scripts/run_with_push.py --phase ${{ steps.get_phase.outputs.phase }}
 
-      - name: ⑦ 输出摘要
+       - name: ⑦ 上传宏观缓存（可选，供下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: macro-cache
+          path: memory_data/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: ⑧ 输出摘要
         run: |
           echo "### 📲 V系统推送摘要" >> $GITHUB_STEP_SUMMARY
           echo "时间: $(date '+%Y-%m-%d %H:%M:%S') (北京时间)" >> $GITHUB_STEP_SUMMARY
           echo "阶段: ${{ steps.get_phase.outputs.phase }}" >> $GITHUB_STEP_SUMMARY
           echo "状态: ✅ 推送完成" >> $GITHUB_STEP_SUMMARY
-
-      - name: ⑧ 上传宏观缓存（可选）
-        uses: actions/upload-artifact@v4  
-        with:
-             name: macro-cache
-             path: memory_data/
-            retention-days: 7
