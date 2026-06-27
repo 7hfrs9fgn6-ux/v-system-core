@@ -3,7 +3,7 @@
 """
 V系统完整闭环执行脚本
 支持五阶段：pre / intraday_a / intraday_b / post / night
-集成：宏观数据永久缓存 + 历史记录、市场数据按日期去重、记忆体自动提交
+集成：宏观数据永久缓存、市场数据永久缓存、记忆体增量追加
 """
 
 import sys
@@ -95,40 +95,29 @@ def main():
     if hasattr(market_data, '_index_data'):
         result._index_data = market_data._index_data
 
-    # ---------- 2.5 宏观数据采集（永久缓存 + 历史记录） ----------
+    # ---------- 2.5 宏观数据采集（自动按需获取，无强制刷新） ----------
     print("\n🌐 步骤2.5：宏观数据采集...")
-    force_refresh = (args.phase == "post")
     try:
         from core.macro_collector import MacroCollector
         macro = MacroCollector()
-        
-        # ✅ 获取宏观数据（post阶段刷新，其他阶段读缓存）
-        macro_data = macro.format_for_push(force_refresh=force_refresh)
+        # ✅ 自动判断：缓存存在且为今日数据则读取，否则刷新
+        macro_data = macro.get_macro_snapshot()
         result._macro_data = macro_data
-        
-        # ✅ post阶段：将今日数据追加到历史记录
-        if force_refresh:
-            macro.record_today_data()
-            print("   ✅ 宏观数据已刷新并追加到历史")
-        else:
-            print("   ✅ 宏观数据已从缓存读取")
-        
         us_count = len(macro_data.get('us_market', {}).get('indices', []))
         asia_count = len(macro_data.get('asia_market', {}).get('indices', []))
-        if force_refresh:
-            print(f"   📊 美股{us_count}个指数, 亚太{asia_count}个指数")
+        print(f"   ✅ 宏观数据: 美股{us_count}个指数, 亚太{asia_count}个指数")
     except Exception as e:
         print(f"   ⚠️ 宏观数据获取失败: {e}")
         result._macro_data = {}
 
-    # ---------- 2.6 市场数据采集（永久缓存，只在 post 刷新） ----------
+    # ---------- 2.6 市场数据采集（自动按需获取，无强制刷新） ----------
     print("\n📈 步骤2.6：市场数据采集...")
     try:
         market = MarketDataCollector(storage_dir="memory_data/")
-        force_refresh_market = (args.phase == "post")
-        indices_data = market.get_indices(force_refresh=force_refresh_market)
-        stats_data = market.get_market_stats(force_refresh=force_refresh_market)
-        flow_data = market.get_sector_flow(force_refresh=force_refresh_market)
+        # ✅ 自动判断：缓存存在且为今日数据则读取，否则刷新
+        indices_data = market.get_indices()
+        stats_data = market.get_market_stats()
+        flow_data = market.get_sector_flow()
         result._indices = indices_data
         result._market_stats = stats_data
         result._sector_flow = flow_data
@@ -187,15 +176,15 @@ def main():
         result.relative_strength = {}
         print("   ⏭️ 相对强度未启用")
 
-    # ---------- 6. 记忆体 ----------
+    # ---------- 6. 记忆体存储（增量追加） ----------
     print("\n💾 步骤6：记忆体存储...")
     memory_config = config.get('memory', {})
     if memory_config.get('enabled', False):
         memory = MemoryStore(config)
-        memory.save_signal_record(result, args.phase)
+        memory.save_signal_record(result, args.phase)      # 增量追加信号
         if hasattr(result, 'shadow') and result.shadow:
-            memory.save_shadow_record(result.shadow, args.phase)
-        memory.save_trust_record(result.trust_score, result.judge_status, args.phase)
+            memory.save_shadow_record(result.shadow, args.phase)  # 增量追加影子
+        memory.save_trust_record(result.trust_score, result.judge_status, args.phase)  # 增量追加信任度
         print("   ✅ 记忆体存储完成")
     else:
         print("   ⏭️ 记忆体未启用")
