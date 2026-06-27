@@ -1,34 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-宏观数据采集模块（永久缓存+每日增量版）
-- 永久缓存：数据一旦获取，永久保存
-- 每日增量：每天首次运行刷新数据，后续直接使用缓存
-- 所有阶段共享同一份缓存
+宏观数据采集模块（增量历史版）
+不再使用覆盖式缓存，改为通过 MacroHistory 增量追加到 CSV
+每日首次运行获取当日数据并追加，后续运行直接跳过
 """
 
 import os
 import logging
 import time
-import json
-import concurrent.futures
 from datetime import datetime
 from typing import Dict, Optional
 
-os.environ['TQDM_DISABLE'] = '1'
-
-from core.macro_cache import MacroCache
+from core.macro_history import MacroHistory
 
 logger = logging.getLogger(__name__)
 
 
 class MacroCollector:
     def __init__(self):
-        self._cache = MacroCache()
-        self._retry_count = 1
-        self._retry_delay = [2]
+        self._history = MacroHistory()
         self._timeout = 8
-        logger.info(f"📁 宏观缓存目录: {self._cache.storage_dir}")
 
     # ---------- 通用辅助 ----------
     def _safe_float(self, value) -> Optional[float]:
@@ -48,59 +40,95 @@ class MacroCollector:
                     return c
         return None
 
-    def _get_empty_result(self) -> Dict:
-        return {
-            "indices": {},
-            "semiconductor": {},
-            "tech_giants": {},
-            "oil": {},
-            "gold": {},
-            "usd_cny": {},
-            "price": None,
-            "pct_change": None,
-            "data_source": "empty",
-            "timestamp": datetime.now().isoformat()
-        }
-
-    def _is_empty_result(self, data) -> bool:
-        if data is None:
-            return True
-        if isinstance(data, dict):
-            for key, value in data.items():
-                if value and not self._is_empty_result(value):
-                    return False
-            return True
-        if isinstance(data, list):
-            return len(data) == 0
+    def _is_data_valid(self, data: Dict) -> bool:
+        """检查数据是否有效（至少有一个指数或价格）"""
+        if not data:
+            return False
+        for key, value in data.items():
+            if isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    if sub_value and isinstance(sub_value, dict) and sub_value.get('price') is not None:
+                        return True
         return False
 
     # ============================================================
-    # 核心方法：自动判断缓存日期，永久缓存+每日增量
+    # 核心方法：获取并记录当日宏观数据（增量追加）
     # ============================================================
-    def get_macro_snapshot(self) -> Dict:
+    def refresh_today(self) -> bool:
         """
-        获取宏观快照：永久缓存，自动判断是否今日
-        - 如果缓存存在且是今日数据，直接使用
-        - 否则刷新数据（每日首次运行）
+        获取当日宏观数据并追加到历史
+        返回 True 表示成功记录，False 表示今日已存在或获取失败
         """
-        cache_file = os.path.join(self._cache.storage_dir, "macro_snapshot.json")
+        # 检查今日是否已记录（快速判断，避免重复获取）
+        us_df = self._history._load_csv("macro_us_indices.csv")
+        if self._history._is_today_recorded(us_df):
+            logger.info("⏭️ 今日宏观数据已存在，无需刷新")
+            return False
 
-        # 检查缓存是否存在且为今日
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file, 'r') as f:
-                    data = json.load(f)
-                # 检查缓存日期
-                if '_cache_date' in data and data['_cache_date'] == datetime.now().strftime("%Y-%m-%d"):
-                    logger.info(f"✅ 使用今日缓存宏观快照: {cache_file}")
-                    return data.get('data', {})
-                else:
-                    logger.info(f"📅 缓存存在但日期不是今日，刷新...")
-            except Exception as e:
-                logger.warning(f"读取缓存失败: {e}，刷新...")
+        logger.info("📊 获取当日宏观数据...")
+        result = self._fetch_all_impl()
+        if not result or not self._is_data_valid(result):
+            logger.warning("⚠️ 宏观数据获取失败，无法记录")
+            return False
 
-        # 缓存不存在或非今日，刷新
-        logger.info("📊 刷新宏观数据...")
+        # 记录各品种（调用 MacroHistory 的方法）
+        us = result.get("us_market", {})
+        self._history.record_us_indices(us.get("indices", {}))
+        self._history.record_tech_giants(us.get("tech_giants", {}))
+
+        asia = result.get("asia_market", {})
+        self._history.record_asia_indices(asia.get("indices", {}))
+
+        euro = result.get("europe_market", {})
+        self._history.record_europe_indices(euro.get("indices", {}))
+
+        comm = result.get("commodities", {})
+        self._history.record_commodities(comm.get("oil", {}), comm.get("gold", {}))
+
+        forex = result.get("forex", {})
+        self._history.record_forex(forex.get("usd_cny", {}))
+
+        a50 = result.get("a50_futures", {})
+        self._history.record_a50(a50)
+
+        logger.info("✅ 当日宏观数据已追加到历史")
+        return True
+
+    def get_latest_data(self) -> Dict:
+        """获取最新数据（用于推送展示），优先今日数据，否则取最近一日"""
+        # 尝试从历史中读取最新数据
+        us_indices = self._history.get_latest_us_indices()
+        us_giants = self._history.get_latest_tech_giants()
+        asia_indices = self._history.get_latest_asia_indices()
+        euro_indices = self._history.get_latest_europe_indices()
+        commodities = self._history.get_latest_commodities()
+        forex = self._history.get_latest_forex()
+        a50 = self._history.get_latest_a50()
+
+        # 构造与之前兼容的格式
+        result = {
+            "us_market": {
+                "indices": us_indices,
+                "tech_giants": us_giants,
+            },
+            "asia_market": {
+                "indices": asia_indices,
+            },
+            "europe_market": {
+                "indices": euro_indices,
+            },
+            "commodities": commodities,
+            "forex": forex,
+            "a50_futures": a50,
+            "timestamp": datetime.now().isoformat()
+        }
+        return result
+
+    # ============================================================
+    # 实际获取各数据（内部实现，与之前稳定版相同）
+    # ============================================================
+    def _fetch_all_impl(self) -> Dict:
+        """获取所有宏观数据"""
         result = {
             "us_market": self._fetch_us_market_impl(),
             "asia_market": self._fetch_asia_market_impl(),
@@ -108,38 +136,11 @@ class MacroCollector:
             "commodities": self._fetch_commodities_impl(),
             "forex": self._fetch_forex_impl(),
             "a50_futures": self._fetch_a50_impl(),
-            "timestamp": datetime.now().isoformat()
         }
-        try:
-            with open(cache_file, 'w') as f:
-                json.dump({
-                    '_cache_date': datetime.now().strftime("%Y-%m-%d"),
-                    '_cache_time': datetime.now().isoformat(),
-                    'data': result
-                }, f, ensure_ascii=False, indent=2)
-            logger.info(f"✅ 宏观快照已保存: {cache_file}")
-        except Exception as e:
-            logger.warning(f"保存宏观快照失败: {e}")
         return result
 
-    def format_for_push(self) -> Dict:
-        """格式化宏观数据供推送使用（无参数，内部自动判断）"""
-        snapshot = self.get_macro_snapshot()
-        return {
-            "us_market": self._format_us_market(snapshot.get("us_market", {})),
-            "asia_market": self._format_asia_market(snapshot.get("asia_market", {})),
-            "europe_market": self._format_europe_market(snapshot.get("europe_market", {})),
-            "commodities": self._format_commodities(snapshot.get("commodities", {})),
-            "forex": self._format_forex(snapshot.get("forex", {})),
-            "a50_futures": self._format_a50(snapshot.get("a50_futures", {})),
-            "timestamp": snapshot.get("timestamp", "")
-        }
-
-    # ============================================================
-    # 数据获取实现（增强列名识别）
-    # ============================================================
     def _fetch_us_market_impl(self) -> Dict:
-        result = {"indices": {}, "semiconductor": {}, "tech_giants": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
+        result = {"indices": {}, "tech_giants": {}, "semiconductor": {}}
         try:
             import akshare as ak
             df = ak.stock_us_spot()
@@ -174,7 +175,6 @@ class MacroCollector:
                 if not matched.empty:
                     row = matched.iloc[0]
                     result["indices"][keyword] = {
-                        "name": keyword,
                         "price": self._safe_float(row.get(price_col)),
                         "pct_change": self._safe_float(row.get(pct_col)) if pct_col else None
                     }
@@ -184,7 +184,6 @@ class MacroCollector:
             if not sem_matched.empty:
                 row = sem_matched.iloc[0]
                 result["semiconductor"] = {
-                    "name": "费城半导体",
                     "price": self._safe_float(row.get(price_col)),
                     "pct_change": self._safe_float(row.get(pct_col)) if pct_col else None
                 }
@@ -195,7 +194,6 @@ class MacroCollector:
                 if not matched.empty:
                     row = matched.iloc[0]
                     result["tech_giants"][giant] = {
-                        "name": giant,
                         "price": self._safe_float(row.get(price_col)),
                         "pct_change": self._safe_float(row.get(pct_col)) if pct_col else None
                     }
@@ -207,7 +205,7 @@ class MacroCollector:
             return result
 
     def _fetch_asia_market_impl(self) -> Dict:
-        result = {"indices": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
+        result = {"indices": {}}
         try:
             import akshare as ak
             df = None
@@ -241,7 +239,6 @@ class MacroCollector:
                 if not matched.empty:
                     row = matched.iloc[0]
                     result["indices"][code] = {
-                        "name": name,
                         "price": self._safe_float(row.get(price_col)),
                         "pct_change": self._safe_float(row.get(pct_col)) if pct_col else None
                     }
@@ -252,7 +249,7 @@ class MacroCollector:
             return result
 
     def _fetch_europe_market_impl(self) -> Dict:
-        result = {"indices": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
+        result = {"indices": {}}
         try:
             import akshare as ak
             df = None
@@ -286,7 +283,6 @@ class MacroCollector:
                 if not matched.empty:
                     row = matched.iloc[0]
                     result["indices"][code] = {
-                        "name": name,
                         "price": self._safe_float(row.get(price_col)),
                         "pct_change": self._safe_float(row.get(pct_col)) if pct_col else None
                     }
@@ -297,7 +293,7 @@ class MacroCollector:
             return result
 
     def _fetch_commodities_impl(self) -> Dict:
-        result = {"oil": {}, "gold": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
+        result = {"oil": {}, "gold": {}}
         try:
             import akshare as ak
             for symbol, name in [("CL", "WTI"), ("B", "布伦特")]:
@@ -309,7 +305,6 @@ class MacroCollector:
                         pct_col = self._find_column(df, ['涨跌幅', 'change'])
                         if price_col:
                             result["oil"][name] = {
-                                "name": name,
                                 "price": self._safe_float(latest.get(price_col)),
                                 "pct_change": self._safe_float(latest.get(pct_col)) if pct_col else None
                             }
@@ -334,7 +329,7 @@ class MacroCollector:
             return result
 
     def _fetch_forex_impl(self) -> Dict:
-        result = {"usd_cny": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
+        result = {"usd_cny": {}}
         try:
             import akshare as ak
             try:
@@ -370,7 +365,7 @@ class MacroCollector:
             return result
 
     def _fetch_a50_impl(self) -> Dict:
-        result = {"price": None, "pct_change": None, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
+        result = {"price": None, "pct_change": None}
         try:
             import akshare as ak
             for symbol in ["A50", "SGXCN"]:
@@ -392,62 +387,3 @@ class MacroCollector:
         except Exception as e:
             logger.warning(f"A50期货获取异常: {e}")
             return result
-
-    # ============================================================
-    # 格式化方法（兼容空值）
-    # ============================================================
-    def _format_us_market(self, data: Dict) -> Dict:
-        result = {"indices": [], "tech_giants": [], "semiconductor": None}
-        for name, idx in data.get("indices", {}).items():
-            if idx.get("price") is not None:
-                result["indices"].append({"name": name, "price": idx.get("price"), "pct_change": idx.get("pct_change")})
-        sem = data.get("semiconductor", {})
-        if sem.get("price") is not None:
-            result["semiconductor"] = {"name": "费城半导体", "price": sem.get("price"), "pct_change": sem.get("pct_change")}
-        for name, giant in data.get("tech_giants", {}).items():
-            if giant.get("price") is not None:
-                result["tech_giants"].append({"name": name, "price": giant.get("price"), "pct_change": giant.get("pct_change")})
-        return result
-
-    def _format_asia_market(self, data: Dict) -> Dict:
-        result = {"indices": []}
-        for code, idx in data.get("indices", {}).items():
-            if idx.get("price") is not None:
-                result["indices"].append({"name": idx.get("name", code), "price": idx.get("price"), "pct_change": idx.get("pct_change")})
-        return result
-
-    def _format_europe_market(self, data: Dict) -> Dict:
-        result = {"indices": []}
-        for code, idx in data.get("indices", {}).items():
-            if idx.get("price") is not None:
-                result["indices"].append({"name": idx.get("name", code), "price": idx.get("price"), "pct_change": idx.get("pct_change")})
-        return result
-
-    def _format_commodities(self, data: Dict) -> Dict:
-        result = {"oil": [], "gold": None}
-        for name, oil in data.get("oil", {}).items():
-            if oil.get("price") is not None:
-                result["oil"].append({"name": oil.get("name", name), "price": oil.get("price"), "pct_change": oil.get("pct_change")})
-        gold = data.get("gold", {})
-        if gold.get("price") is not None:
-            result["gold"] = {"price": gold.get("price"), "pct_change": gold.get("pct_change")}
-        return result
-
-    def _format_forex(self, data: Dict) -> Dict:
-        result = {"usd_cny": {}}
-        usd = data.get("usd_cny", {})
-        if usd.get("onshore") is not None:
-            result["usd_cny"]["onshore"] = usd.get("onshore")
-        if usd.get("central") is not None:
-            result["usd_cny"]["central"] = usd.get("central")
-        if usd.get("pct_change") is not None:
-            result["usd_cny"]["pct_change"] = usd.get("pct_change")
-        return result
-
-    def _format_a50(self, data: Dict) -> Dict:
-        result = {}
-        if data.get("price") is not None:
-            result["price"] = data.get("price")
-        if data.get("pct_change") is not None:
-            result["pct_change"] = data.get("pct_change")
-        return result
