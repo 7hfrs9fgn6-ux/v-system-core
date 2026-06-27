@@ -414,3 +414,125 @@ class MacroCollector:
             return float(value)
         except (ValueError, TypeError):
             return None
+
+    # ============================================================
+    # 8. 格式化宏观数据（供推送使用）
+    # ============================================================
+    def format_for_push(self) -> Dict:
+        """
+        获取并格式化宏观数据，供推送使用
+        返回结构化的宏观数据
+        """
+        snapshot = self.get_macro_snapshot()
+        
+        formatted = {
+            "us_market": self._format_us_market(snapshot.get("us_market", {})),
+            "asia_market": self._format_asia_market(snapshot.get("asia_market", {})),
+            "europe_market": self._format_europe_market(snapshot.get("europe_market", {})),
+            "commodities": self._format_commodities(snapshot.get("commodities", {})),
+            "forex": self._format_forex(snapshot.get("forex", {})),
+            "a50_futures": self._format_a50(snapshot.get("a50_futures", {})),
+            "timestamp": snapshot.get("timestamp", "")
+        }
+        return formatted
+    
+    def _format_us_market(self, data: Dict) -> Dict:
+        """格式化美股数据"""
+        result = {"indices": [], "tech_giants": [], "semiconductor": None}
+        
+        # 指数
+        for code, idx in data.get("indices", {}).items():
+            if idx.get("price"):
+                result["indices"].append({
+                    "name": idx.get("name", code),
+                    "price": idx.get("price"),
+                    "pct_change": idx.get("pct_change")
+                })
+        
+        # 半导体
+        sem = data.get("semiconductor", {})
+        if sem.get("price"):
+            result["semiconductor"] = {
+                "name": sem.get("name", "费城半导体"),
+                "price": sem.get("price"),
+                "pct_change": sem.get("pct_change")
+            }
+        
+        # 科技巨头
+        for name, giant in data.get("tech_giants", {}).items():
+            if giant.get("price"):
+                result["tech_giants"].append({
+                    "name": name,
+                    "price": giant.get("price"),
+                    "pct_change": giant.get("pct_change")
+                })
+        
+        return result
+    
+    def _format_asia_market(self, data: Dict) -> Dict:
+        """格式化亚太市场数据"""
+        result = {"indices": []}
+        for code, idx in data.get("indices", {}).items():
+            if idx.get("price"):
+                result["indices"].append({
+                    "name": idx.get("name", code),
+                    "price": idx.get("price"),
+                    "pct_change": idx.get("pct_change")
+                })
+        return result
+    
+    def _format_europe_market(self, data: Dict) -> Dict:
+        """格式化欧洲市场数据"""
+        result = {"indices": []}
+        for code, idx in data.get("indices", {}).items():
+            if idx.get("price"):
+                result["indices"].append({
+                    "name": idx.get("name", code),
+                    "price": idx.get("price"),
+                    "pct_change": idx.get("pct_change")
+                })
+        return result
+    
+    def _format_commodities(self, data: Dict) -> Dict:
+        """格式化大宗商品数据"""
+        result = {"oil": [], "gold": None}
+        
+        # 原油
+        for name, oil in data.get("oil", {}).items():
+            if oil.get("price"):
+                result["oil"].append({
+                    "name": name,
+                    "price": oil.get("price"),
+                    "pct_change": oil.get("pct_change")
+                })
+        
+        # 黄金
+        gold = data.get("gold", {})
+        if gold.get("price"):
+            result["gold"] = {
+                "price": gold.get("price"),
+                "pct_change": gold.get("pct_change")
+            }
+        
+        return result
+    
+    def _format_forex(self, data: Dict) -> Dict:
+        """格式化汇率数据"""
+        result = {"usd_cny": {}}
+        usd = data.get("usd_cny", {})
+        if usd.get("onshore"):
+            result["usd_cny"]["onshore"] = usd.get("onshore")
+        if usd.get("central"):
+            result["usd_cny"]["central"] = usd.get("central")
+        if usd.get("pct_change"):
+            result["usd_cny"]["pct_change"] = usd.get("pct_change")
+        return result
+    
+    def _format_a50(self, data: Dict) -> Dict:
+        """格式化A50期货数据"""
+        result = {}
+        if data.get("price"):
+            result["price"] = data.get("price")
+        if data.get("pct_change"):
+            result["pct_change"] = data.get("pct_change")
+        return result
