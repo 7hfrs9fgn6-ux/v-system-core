@@ -63,7 +63,7 @@ class RateLimiter:
         return max(0, wait_time)
 
 
-def retry_on_failure(max_attempts=2, delays=[0, 1, 2]):
+def retry_on_failure(max_attempts=3, delays=[0, 2, 4]):
     def decorator(func):
         def wrapper(*args, **kwargs):
             last_exception = None
@@ -87,7 +87,7 @@ class RealDataAdapter:
         self.tushare_token = os.environ.get("TUSHARE_TOKEN")
         self.use_tushare = bool(self.tushare_token and self.tushare_token != "dummy")
         self.data_source = "AKShare"
-        self._rate_limiter = RateLimiter(max_calls=100, period=60)
+        self._rate_limiter = RateLimiter(max_calls=80, period=60)  # 降低限流，减少压力
         self._index_close = 0
         self._index_pct = 0
 
@@ -155,9 +155,9 @@ class RealDataAdapter:
         return None
 
     # ============================================================
-    # 主数据源：AKShare（优化重试策略）
+    # 主数据源：AKShare（优化并发和超时）
     # ============================================================
-    @retry_on_failure(max_attempts=2, delays=[0, 2])
+    @retry_on_failure(max_attempts=2, delays=[0, 3])
     def _fetch_from_akshare(self) -> StandardMarketData:
         import akshare as ak
         target_date = self._get_target_date()
@@ -204,11 +204,12 @@ class RealDataAdapter:
         except:
             pass
 
-        # 各板块（优化并发和重试）
+        # 各板块（优化并发数和超时）
         sectors = []
         logger.info("📊 AKShare 获取各板块52周回撤...")
 
-        with ThreadPoolExecutor(max_workers=5) as executor:  # 增加并发数
+        # 使用更小的并发数，避免同时请求过多
+        with ThreadPoolExecutor(max_workers=3) as executor:
             future_to_name = {
                 executor.submit(self._fetch_single_sector_with_retry, name): name
                 for name in SECTOR_NAMES
@@ -216,10 +217,10 @@ class RealDataAdapter:
             for future in future_to_name:
                 name = future_to_name[future]
                 try:
-                    result = future.result(timeout=20)  # 整体超时20秒
+                    result = future.result(timeout=30)  # 增加超时到30秒
                     sectors.append(result)
                 except FuturesTimeoutError:
-                    logger.warning(f"⚠️ {name} 获取超时，使用随机值")
+                    logger.warning(f"⚠️ {name} 获取超时（30s），使用随机值")
                     sectors.append(self._make_fallback_sector(name))
                 except Exception as e:
                     logger.warning(f"⚠️ {name} 获取异常 ({e})，使用随机值")
@@ -236,9 +237,9 @@ class RealDataAdapter:
         )
 
     def _fetch_single_sector_with_retry(self, name: str) -> SectorSignal:
-        """单个板块获取，优化重试次数和等待时间"""
-        max_attempts = 2  # 从5次减为2次
-        delays = [0, 1]   # 等待0秒、1秒
+        """单个板块获取，优化重试策略"""
+        max_attempts = 3  # 重试3次
+        delays = [0, 1, 2]
         last_exception = None
         for attempt in range(max_attempts):
             try:
@@ -251,12 +252,10 @@ class RealDataAdapter:
                     logger.warning(f"⚠️ {name}: AKShare 异常 ({e}) (尝试 {attempt+1}/{max_attempts})")
                 if attempt < max_attempts - 1:
                     time.sleep(delays[attempt])
-                    # 限流等待
                     if not self._rate_limiter.acquire():
                         wait = self._rate_limiter.wait()
                         logger.info(f"⏳ 限流等待 {wait:.1f}s")
                         time.sleep(wait)
-        # 所有重试失败，返回兜底值
         logger.error(f"❌ {name}: AKShare 所有重试均失败，使用随机值")
         return self._make_fallback_sector(name)
 
@@ -267,7 +266,6 @@ class RealDataAdapter:
         if not code:
             return self._make_fallback_sector(name)
 
-        # 限流
         if not self._rate_limiter.acquire():
             time.sleep(self._rate_limiter.wait())
 
@@ -313,7 +311,7 @@ class RealDataAdapter:
         )
 
     # ============================================================
-    # 备用数据源：Tushare
+    # 备用数据源：Tushare（不变）
     # ============================================================
     def _fetch_from_tushare(self) -> StandardMarketData:
         import tushare as ts
@@ -323,7 +321,6 @@ class RealDataAdapter:
         target_date = self._get_target_date()
         date_str = target_date.strftime("%Y%m%d")
 
-        # 大盘
         try:
             index_df = pro.index_daily(ts_code="000001.SH", start_date=date_str, end_date=date_str)
             if index_df.empty:
@@ -338,7 +335,6 @@ class RealDataAdapter:
         except:
             trend = "range"
 
-        # 北向
         north_flow = None
         try:
             north_df = pro.moneyflow_hsgt(start_date=date_str, end_date=date_str)
@@ -346,7 +342,7 @@ class RealDataAdapter:
         except:
             pass
 
-        # 行业数据降级到 AKShare
+        # 行业数据降级到 AKShare（但会使用上面的优化逻辑）
         logger.info("📊 Tushare 备用模式：行业数据从 AKShare 获取...")
         return self._fetch_from_akshare()
 
