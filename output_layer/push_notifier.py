@@ -27,9 +27,11 @@ class PushNotifier:
         self._push_interval = 2
         self._sent_cache = {}
         self._cache_ttl = 3600
-        # 存储大盘数据（用于推送）
+        # 大盘数据
         self._index_close = 0
         self._index_pct = 0
+        # 宏观数据（P1新增）
+        self._macro_data = {}
 
     def _load_config(self, path):
         if os.path.exists(path):
@@ -86,6 +88,9 @@ class PushNotifier:
         if hasattr(result, '_index_data'):
             self._index_close = result._index_data.get('close', 0)
             self._index_pct = result._index_data.get('pct', 0)
+
+        # ✅ 读取宏观数据（P1新增）
+        self._macro_data = getattr(result, '_macro_data', {})
 
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         title = f"📊 V系统 {phase_info.get('emoji', '')} {phase_info.get('name', phase)}"
@@ -163,6 +168,96 @@ class PushNotifier:
                 lines.append("   └─ 明显回调，注意风险")
             else:
                 lines.append("   └─ 小幅波动，正常整理")
+
+        # ========== 宏观数据展示（P1新增） ==========
+        if self._macro_data:
+            macro = self._macro_data
+            lines.append("")
+            lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            lines.append("【🌍 隔夜外围市场】")
+            
+            # 美股
+            us = macro.get('us_market', {})
+            us_indices = us.get('indices', [])
+            if us_indices:
+                us_line = "  🇺🇸 美股: "
+                for idx in us_indices[:3]:
+                    pct = idx.get('pct_change', 0)
+                    arrow = "▲" if pct and pct > 0 else "▼" if pct and pct < 0 else "→"
+                    us_line += f"{idx.get('name', '')} {arrow} {abs(pct or 0):.2f}%  "
+                lines.append(us_line)
+            
+            # 费城半导体
+            sem = us.get('semiconductor', {})
+            if sem.get('price'):
+                pct = sem.get('pct_change', 0)
+                arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                lines.append(f"  🔌 费城半导体: {arrow} {abs(pct):.2f}%")
+            
+            # 科技巨头（只显示涨跌幅最大的3个）
+            techs = us.get('tech_giants', [])
+            if techs:
+                sorted_techs = sorted(techs, key=lambda x: abs(x.get('pct_change', 0)), reverse=True)
+                top_techs = sorted_techs[:3]
+                tech_line = "  💻 科技巨头: "
+                for t in top_techs:
+                    pct = t.get('pct_change', 0)
+                    arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                    tech_line += f"{t.get('name', '')} {arrow} {abs(pct):.2f}%  "
+                lines.append(tech_line)
+            
+            # 亚太
+            asia = macro.get('asia_market', {})
+            asia_indices = asia.get('indices', [])
+            if asia_indices:
+                asia_line = "  🌏 亚太: "
+                for idx in asia_indices[:4]:
+                    pct = idx.get('pct_change', 0)
+                    arrow = "▲" if pct and pct > 0 else "▼" if pct and pct < 0 else "→"
+                    asia_line += f"{idx.get('name', '')} {arrow} {abs(pct or 0):.2f}%  "
+                lines.append(asia_line)
+            
+            # 欧洲
+            euro = macro.get('europe_market', {})
+            euro_indices = euro.get('indices', [])
+            if euro_indices:
+                euro_line = "  🇪🇺 欧洲: "
+                for idx in euro_indices[:3]:
+                    pct = idx.get('pct_change', 0)
+                    arrow = "▲" if pct and pct > 0 else "▼" if pct and pct < 0 else "→"
+                    euro_line += f"{idx.get('name', '')} {arrow} {abs(pct or 0):.2f}%  "
+                lines.append(euro_line)
+            
+            # 大宗商品
+            comm = macro.get('commodities', {})
+            oil_list = comm.get('oil', [])
+            oil_line = "  🛢️ 原油: "
+            for oil in oil_list:
+                pct = oil.get('pct_change', 0)
+                arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                oil_line += f"{oil.get('name', '')} {arrow} {abs(pct):.2f}%  "
+            lines.append(oil_line)
+            
+            # 黄金
+            gold = comm.get('gold', {})
+            if gold.get('price'):
+                pct = gold.get('pct_change', 0)
+                arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                lines.append(f"  🥇 黄金: {arrow} {abs(pct):.2f}%  (${gold.get('price', 0):.2f})")
+            
+            # 汇率 + A50
+            forex = macro.get('forex', {})
+            usd_cny = forex.get('usd_cny', {})
+            if usd_cny.get('onshore'):
+                lines.append(f"  💱 人民币: {usd_cny.get('onshore', 0):.4f}")
+            
+            a50 = macro.get('a50_futures', {})
+            if a50.get('price'):
+                pct = a50.get('pct_change', 0)
+                arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
+                lines.append(f"  📊 A50期货: {a50.get('price', 0):.2f} {arrow} {abs(pct):.2f}%")
+            
+            lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         # 核心建议
         lines.append("")
