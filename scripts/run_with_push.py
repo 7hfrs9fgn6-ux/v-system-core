@@ -3,7 +3,7 @@
 """
 V系统完整闭环执行脚本
 支持五阶段：pre / intraday_a / intraday_b / post / night
-集成：宏观数据永久缓存、市场数据永久缓存、记忆体增量追加
+集成：宏观数据永久缓存、市场数据按日期去重、记忆体自动提交
 """
 
 import sys
@@ -79,7 +79,7 @@ def main():
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
 
-    # 将大盘数据附加到 market_data
+    # 将大盘数据附加到 market_data（如果存在）
     if hasattr(adapter, '_index_close') and hasattr(adapter, '_index_pct'):
         market_data._index_data = {
             'close': adapter._index_close,
@@ -95,13 +95,12 @@ def main():
     if hasattr(market_data, '_index_data'):
         result._index_data = market_data._index_data
 
-    # ---------- 2.5 宏观数据采集（自动按需获取，无强制刷新） ----------
+    # ---------- 2.5 宏观数据采集 ----------
     print("\n🌐 步骤2.5：宏观数据采集...")
     try:
         from core.macro_collector import MacroCollector
         macro = MacroCollector()
-        # ✅ 自动判断：缓存存在且为今日数据则读取，否则刷新
-        macro_data = macro.get_macro_snapshot()
+        macro_data = macro.get_macro_snapshot()  # 自动按需获取
         result._macro_data = macro_data
         us_count = len(macro_data.get('us_market', {}).get('indices', []))
         asia_count = len(macro_data.get('asia_market', {}).get('indices', []))
@@ -110,11 +109,10 @@ def main():
         print(f"   ⚠️ 宏观数据获取失败: {e}")
         result._macro_data = {}
 
-    # ---------- 2.6 市场数据采集（自动按需获取，无强制刷新） ----------
+    # ---------- 2.6 市场数据采集 ----------
     print("\n📈 步骤2.6：市场数据采集...")
     try:
         market = MarketDataCollector(storage_dir="memory_data/")
-        # ✅ 自动判断：缓存存在且为今日数据则读取，否则刷新
         indices_data = market.get_indices()
         stats_data = market.get_market_stats()
         flow_data = market.get_sector_flow()
@@ -129,6 +127,18 @@ def main():
         result._indices = {}
         result._market_stats = {}
         result._sector_flow = {}
+
+    # ✅ 修复4：确保大盘指数始终可用（从市场数据中提取上证指数）
+    if hasattr(result, '_indices') and result._indices:
+        indices = result._indices.get('indices', {})
+        if '上证指数' in indices:
+            sh = indices['上证指数']
+            if sh.get('price'):
+                # 如果已有 _index_data，保留；否则创建
+                if not hasattr(result, '_index_data') or not result._index_data:
+                    result._index_data = {}
+                result._index_data['close'] = sh.get('price')
+                result._index_data['pct'] = sh.get('pct_change', 0)
 
     # ---------- 3. 烈度评分 ----------
     print("\n📰 步骤3：消息面烈度评分...")
@@ -176,15 +186,15 @@ def main():
         result.relative_strength = {}
         print("   ⏭️ 相对强度未启用")
 
-    # ---------- 6. 记忆体存储（增量追加） ----------
+    # ---------- 6. 记忆体 ----------
     print("\n💾 步骤6：记忆体存储...")
     memory_config = config.get('memory', {})
     if memory_config.get('enabled', False):
         memory = MemoryStore(config)
-        memory.save_signal_record(result, args.phase)      # 增量追加信号
+        memory.save_signal_record(result, args.phase)
         if hasattr(result, 'shadow') and result.shadow:
-            memory.save_shadow_record(result.shadow, args.phase)  # 增量追加影子
-        memory.save_trust_record(result.trust_score, result.judge_status, args.phase)  # 增量追加信任度
+            memory.save_shadow_record(result.shadow, args.phase)
+        memory.save_trust_record(result.trust_score, result.judge_status, args.phase)
         print("   ✅ 记忆体存储完成")
     else:
         print("   ⏭️ 记忆体未启用")
