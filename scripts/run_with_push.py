@@ -3,7 +3,7 @@
 """
 V系统完整闭环执行脚本
 支持五阶段：pre / intraday_a / intraday_b / post / night
-集成：宏观数据永久缓存、市场数据按日期去重、记忆体自动提交
+所有数据采集均使用永久缓存 + 按日期去重，避免重复获取
 """
 
 import sys
@@ -79,7 +79,7 @@ def main():
     print(f"   ✅ 板块数: {len(market_data.sectors)}")
     print(f"   🟢 新鲜度: {market_data.freshness.value}")
 
-    # 将大盘数据附加到 market_data（如果存在）
+    # 将大盘数据附加到 market_data（供后续使用）
     if hasattr(adapter, '_index_close') and hasattr(adapter, '_index_pct'):
         market_data._index_data = {
             'close': adapter._index_close,
@@ -92,15 +92,17 @@ def main():
     result = sm.run(market_data)
     print(f"   ✅ 分析完成，信任度: {result.trust_score:.2f}, 判断: {result.judge_status}")
 
+    # 将大盘数据附加到 result
     if hasattr(market_data, '_index_data'):
         result._index_data = market_data._index_data
 
-    # ---------- 2.5 宏观数据采集 ----------
+    # ---------- 2.5 宏观数据采集（永久缓存，按日期去重） ----------
     print("\n🌐 步骤2.5：宏观数据采集...")
     try:
         from core.macro_collector import MacroCollector
         macro = MacroCollector()
-        macro_data = macro.get_macro_snapshot()  # 自动按需获取
+        # 自动判断是否今日已有数据，没有则获取
+        macro_data = macro.format_for_push()
         result._macro_data = macro_data
         us_count = len(macro_data.get('us_market', {}).get('indices', []))
         asia_count = len(macro_data.get('asia_market', {}).get('indices', []))
@@ -109,10 +111,11 @@ def main():
         print(f"   ⚠️ 宏观数据获取失败: {e}")
         result._macro_data = {}
 
-    # ---------- 2.6 市场数据采集 ----------
+    # ---------- 2.6 市场数据采集（永久缓存，按日期去重） ----------
     print("\n📈 步骤2.6：市场数据采集...")
     try:
         market = MarketDataCollector(storage_dir="memory_data/")
+        # 自动判断是否今日已有数据
         indices_data = market.get_indices()
         stats_data = market.get_market_stats()
         flow_data = market.get_sector_flow()
@@ -127,18 +130,6 @@ def main():
         result._indices = {}
         result._market_stats = {}
         result._sector_flow = {}
-
-    # ✅ 修复4：确保大盘指数始终可用（从市场数据中提取上证指数）
-    if hasattr(result, '_indices') and result._indices:
-        indices = result._indices.get('indices', {})
-        if '上证指数' in indices:
-            sh = indices['上证指数']
-            if sh.get('price'):
-                # 如果已有 _index_data，保留；否则创建
-                if not hasattr(result, '_index_data') or not result._index_data:
-                    result._index_data = {}
-                result._index_data['close'] = sh.get('price')
-                result._index_data['pct'] = sh.get('pct_change', 0)
 
     # ---------- 3. 烈度评分 ----------
     print("\n📰 步骤3：消息面烈度评分...")
@@ -212,7 +203,6 @@ def main():
                 agent_result = agent.get_daily_summary()
                 result.agent_analysis = agent_result
                 print(f"   ✅ 智能代理分析完成，工具调用: {agent_result.get('tool_calls_made', 0)} 次")
-
                 stats = Bridge.get_stats()
                 print(f"   🔧 Bridge 统计: 成功率 {stats.get('success_rate', 0)}%")
             else:
