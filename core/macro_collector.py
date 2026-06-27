@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-宏观数据采集模块（P0修复版）
-增强列名识别，多备选接口，确保数据获取
+宏观数据采集模块（永久缓存+每日增量版）
+- 永久缓存：数据一旦获取，永久保存
+- 每日增量：每天首次运行刷新数据，后续直接使用缓存
+- 所有阶段共享同一份缓存
 """
 
 import os
@@ -72,21 +74,32 @@ class MacroCollector:
             return len(data) == 0
         return False
 
-    # ---------- 获取并缓存宏观快照 ----------
-    def get_macro_snapshot(self, force_refresh: bool = False) -> Dict:
+    # ============================================================
+    # 核心方法：自动判断缓存日期，永久缓存+每日增量
+    # ============================================================
+    def get_macro_snapshot(self) -> Dict:
+        """
+        获取宏观快照：永久缓存，自动判断是否今日
+        - 如果缓存存在且是今日数据，直接使用
+        - 否则刷新数据（每日首次运行）
+        """
         cache_file = os.path.join(self._cache.storage_dir, "macro_snapshot.json")
 
-        if not force_refresh and os.path.exists(cache_file):
+        # 检查缓存是否存在且为今日
+        if os.path.exists(cache_file):
             try:
                 with open(cache_file, 'r') as f:
                     data = json.load(f)
-                # 检查是否包含今日数据
+                # 检查缓存日期
                 if '_cache_date' in data and data['_cache_date'] == datetime.now().strftime("%Y-%m-%d"):
                     logger.info(f"✅ 使用今日缓存宏观快照: {cache_file}")
                     return data.get('data', {})
-            except:
-                pass
+                else:
+                    logger.info(f"📅 缓存存在但日期不是今日，刷新...")
+            except Exception as e:
+                logger.warning(f"读取缓存失败: {e}，刷新...")
 
+        # 缓存不存在或非今日，刷新
         logger.info("📊 刷新宏观数据...")
         result = {
             "us_market": self._fetch_us_market_impl(),
@@ -109,8 +122,9 @@ class MacroCollector:
             logger.warning(f"保存宏观快照失败: {e}")
         return result
 
-    def format_for_push(self, force_refresh: bool = False) -> Dict:
-        snapshot = self.get_macro_snapshot(force_refresh)
+    def format_for_push(self) -> Dict:
+        """格式化宏观数据供推送使用（无参数，内部自动判断）"""
+        snapshot = self.get_macro_snapshot()
         return {
             "us_market": self._format_us_market(snapshot.get("us_market", {})),
             "asia_market": self._format_asia_market(snapshot.get("asia_market", {})),
@@ -122,7 +136,7 @@ class MacroCollector:
         }
 
     # ============================================================
-    # 美股获取（增强列名识别）
+    # 数据获取实现（增强列名识别）
     # ============================================================
     def _fetch_us_market_impl(self) -> Dict:
         result = {"indices": {}, "semiconductor": {}, "tech_giants": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
@@ -192,9 +206,6 @@ class MacroCollector:
             logger.warning(f"美股获取异常: {e}")
             return result
 
-    # ============================================================
-    # 亚太市场（多备选接口）
-    # ============================================================
     def _fetch_asia_market_impl(self) -> Dict:
         result = {"indices": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
         try:
@@ -240,9 +251,6 @@ class MacroCollector:
             logger.warning(f"亚太获取异常: {e}")
             return result
 
-    # ============================================================
-    # 欧洲市场（同亚太）
-    # ============================================================
     def _fetch_europe_market_impl(self) -> Dict:
         result = {"indices": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
         try:
@@ -288,9 +296,6 @@ class MacroCollector:
             logger.warning(f"欧洲获取异常: {e}")
             return result
 
-    # ============================================================
-    # 大宗商品（保持不变，已有容错）
-    # ============================================================
     def _fetch_commodities_impl(self) -> Dict:
         result = {"oil": {}, "gold": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
         try:
@@ -328,9 +333,6 @@ class MacroCollector:
             logger.warning(f"大宗商品获取异常: {e}")
             return result
 
-    # ============================================================
-    # 汇率（同）
-    # ============================================================
     def _fetch_forex_impl(self) -> Dict:
         result = {"usd_cny": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
         try:
@@ -367,9 +369,6 @@ class MacroCollector:
             logger.warning(f"汇率获取异常: {e}")
             return result
 
-    # ============================================================
-    # A50期货
-    # ============================================================
     def _fetch_a50_impl(self) -> Dict:
         result = {"price": None, "pct_change": None, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
         try:
