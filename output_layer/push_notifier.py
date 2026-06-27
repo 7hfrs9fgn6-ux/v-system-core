@@ -187,9 +187,9 @@ class PushNotifier:
                     us_line += f"{idx.get('name', '')} {arrow} {abs(pct or 0):.2f}%  "
                 lines.append(us_line)
             
-            # 费城半导体
-            sem = us.get('semiconductor', {})
-            if sem.get('price'):
+             # 费城半导体
+            sem = us.get('semiconductor', None)
+            if sem and sem.get('price'):
                 pct = sem.get('pct_change', 0)
                 arrow = "▲" if pct > 0 else "▼" if pct < 0 else "→"
                 lines.append(f"  🔌 费城半导体: {arrow} {abs(pct):.2f}%")
