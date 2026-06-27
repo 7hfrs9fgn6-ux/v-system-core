@@ -14,6 +14,41 @@ import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 
+# 在文件顶部导入 MacroCollector
+from core.macro_collector import MacroCollector
+
+# 创建全局实例
+_macro_collector = MacroCollector()
+
+# 新增宏观工具函数
+def get_macro_snapshot(self) -> Dict:
+    """获取完整的宏观数据快照（美股、亚太、欧洲、大宗商品、汇率、A50期货）"""
+    return _macro_collector.get_macro_snapshot()
+
+def get_us_market(self) -> Dict:
+    """获取美股市场数据（三大指数、费城半导体、科技巨头）"""
+    return _macro_collector.get_us_market()
+
+def get_asia_market(self) -> Dict:
+    """获取亚太市场数据（日经、韩国、恒生、台湾）"""
+    return _macro_collector.get_asia_market()
+
+def get_europe_market(self) -> Dict:
+    """获取欧洲市场数据（德国DAX、英国FTSE、法国CAC）"""
+    return _macro_collector.get_europe_market()
+
+def get_commodities(self) -> Dict:
+    """获取大宗商品数据（WTI原油、布伦特原油、黄金）"""
+    return _macro_collector.get_commodities()
+
+def get_forex(self) -> Dict:
+    """获取人民币汇率数据"""
+    return _macro_collector.get_forex()
+
+def get_a50_futures(self) -> Dict:
+    """获取A50期货夜盘数据"""
+    return _macro_collector.get_a50_futures()
+    
 # ✅ 新增：网页解析库
 try:
     from bs4 import BeautifulSoup
