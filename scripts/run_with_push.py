@@ -109,6 +109,26 @@ def main():
         print(f"   ⚠️ 宏观数据获取失败: {e}")
         result._macro_data = {}
 
+        # ---------- 2.6 市场数据采集（P2新增） ----------
+    print("\n📈 步骤2.6：市场数据采集...")
+    try:
+        from data_adapter.market_data import MarketDataCollector
+        market = MarketDataCollector()
+        indices_data = market.get_indices()
+        stats_data = market.get_market_stats()
+        flow_data = market.get_sector_flow()
+        result._indices = indices_data
+        result._market_stats = stats_data
+        result._sector_flow = flow_data
+        print(f"   ✅ 获取到 {len(indices_data.get('indices', {}))} 个指数数据")
+        print(f"   📊 涨跌: {stats_data.get('up',0)}涨 / {stats_data.get('down',0)}跌")
+        print(f"   💰 流入TOP5: {len(flow_data.get('net_inflow_top5', []))}个板块")
+    except Exception as e:
+        print(f"   ⚠️ 市场数据采集失败: {e}")
+        result._indices = {}
+        result._market_stats = {}
+        result._sector_flow = {}
+        
     # ---------- 3. 烈度评分 ----------
     print("\n📰 步骤3：消息面烈度评分...")
     sentiment_config = config.get('sentiment', {})
