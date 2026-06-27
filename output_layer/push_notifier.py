@@ -137,17 +137,18 @@ class PushNotifier:
     def _format_message(self, result: SignalResult, phase: str) -> str:
         if phase == "night":
             return self._format_night_message(result)
-        # 使用结构化研报格式（适用于所有非夜间阶段）
         return self._format_structured_report(result, phase)
 
     # ============================================================
-    # 核心：结构化研报级推送（融合旧版清晰结构 + 隐藏内部信息）
+    # 核心：结构化研报级推送
     # ============================================================
     def _format_structured_report(self, result: SignalResult, phase: str) -> str:
-        """生成结构化研报级推送（隐藏内部信息，展示关键数据）"""
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         phase_text = phase_info.get("name", phase)
         emoji = phase_info.get("emoji", "📊")
+
+        signal_dict = {s.name: s for s in result.signals}
+        holding_sector_names = list(set(self.holding_sectors))
 
         lines = []
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -156,7 +157,6 @@ class PushNotifier:
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         # ---------- 1. 市场概览 ----------
-        # 大盘指数
         if self._index_close > 0:
             arrow = "📈" if self._index_pct > 0 else "📉" if self._index_pct < 0 else "➡️"
             lines.append(f"【📊 上证指数】{self._index_close:.2f}  {arrow} {self._index_pct:+.2f}%")
@@ -169,7 +169,6 @@ class PushNotifier:
             else:
                 lines.append("   └─ 小幅波动，正常整理")
 
-        # 涨跌家数
         if self._market_stats:
             stats = self._market_stats
             up = stats.get('up', 0)
@@ -187,20 +186,14 @@ class PushNotifier:
         lines.append("")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        # ---------- 2. 信号汇总（按等级分组） ----------
-        signal_dict = {s.name: s for s in result.signals}
-        holding_sector_names = list(set(self.holding_sectors))
-
-        # 按信号等级分类
+        # ---------- 2. 信号汇总 ----------
         strong_buy = [s for s in result.signals if s.signal_level >= 3]
         watch = [s for s in result.signals if 1 <= s.signal_level < 3]
         risk = [s for s in result.signals if s.signal_level < 0]
-
         strong_buy.sort(key=lambda x: (-x.signal_level, x.name))
         watch.sort(key=lambda x: (-x.signal_level, x.name))
         risk.sort(key=lambda x: (x.signal_level, x.name))
 
-        # 机会信号
         if strong_buy:
             lines.append("【🟢 机会信号】")
             for s in strong_buy:
@@ -219,9 +212,8 @@ class PushNotifier:
                     lines.append(f"    └─ 消息面: {intensity}/10 ({emotion})")
                 lines.append("")
         else:
-            lines.append("【🟢 机会信号】无")
+            lines.append("【🟢 机会信号】无\n")
 
-        # 观察中
         if watch:
             lines.append("【🟡 观察中】")
             for s in watch:
@@ -240,9 +232,8 @@ class PushNotifier:
                     lines.append(f"    └─ 消息面: {intensity}/10 ({emotion})")
                 lines.append("")
         else:
-            lines.append("【🟡 观察中】无")
+            lines.append("【🟡 观察中】无\n")
 
-        # 风险信号
         if risk:
             lines.append("【🔴 风险信号】")
             for s in risk:
@@ -261,11 +252,11 @@ class PushNotifier:
                     lines.append(f"    └─ 消息面: {intensity}/10 ({emotion})")
                 lines.append("")
         else:
-            lines.append("【🔴 风险信号】无")
+            lines.append("【🔴 风险信号】无\n")
 
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        # ---------- 3. 持仓基金信号汇总（含操作提示） ----------
+        # ---------- 3. 持仓基金信号汇总 ----------
         lines.append("")
         lines.append("【📌 持仓基金信号汇总】")
         if self.holding_map:
@@ -331,32 +322,19 @@ class PushNotifier:
             lines.append("")
             lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        # ---------- 6. AI 总结（作为附录，已过滤） ----------
+        # ---------- 6. AI 总结 ----------
         ai_summary = ""
         if hasattr(result, 'agent_analysis') and result.agent_analysis:
             agent_data = result.agent_analysis
             response = agent_data.get('response', '')
             if response:
                 cleaned = self._clean_agent_response(response)
-                if cleaned:
-                    # 如果clean内容过长，提取前300字符
-                    if len(cleaned) > 500:
-                        # 尝试截取到最近的段落结束
-                        cleaned = cleaned[:500]
-                        last_period = cleaned.rfind('。')
-                        if last_period > 0:
-                            cleaned = cleaned[:last_period+1]
-                        else:
-                            cleaned = cleaned[:500] + "..."
-                    ai_summary = cleaned.strip()
+                ai_summary = cleaned.strip()
         if not ai_summary:
             ai_summary = self.commentator.generate_comment(result, self.holding_sectors)
 
         if ai_summary:
             lines.append("【🤖 AI 盘后总结】")
-            # 如果AI总结还包含内部思考，再次过滤
-            if "好的" in ai_summary and "现在" in ai_summary:
-                ai_summary = self._clean_agent_response(ai_summary)
             if len(ai_summary) > 500:
                 ai_summary = ai_summary[:500] + "..."
             lines.append(f"  {ai_summary}")
@@ -379,7 +357,6 @@ class PushNotifier:
     # 辅助：过滤Agent内部思考
     # ============================================================
     def _clean_agent_response(self, response: str) -> str:
-        """过滤Agent思考过程，保留有用内容"""
         filter_patterns = [
             "好的，现在我来",
             "现在我来获取",
@@ -406,21 +383,7 @@ class PushNotifier:
             "还需要",
             "为了获取",
             "我们看看",
-            "接下来",
-            "我打算",
-            "开始分析",
-            "让我看看",
-            "好的现在",
-            "现在我们来",
-            "我们来",
-            "我去获取",
-            "我再获取",
-            "获取一下",
-            "我去拿",
-            "下面我来",
-            "这我需要",
-            "我需要先",
-            "先让我",
+            "接下来"
         ]
         lines = response.split('\n')
         cleaned = []
@@ -428,7 +391,6 @@ class PushNotifier:
             line_strip = line.strip()
             if not line_strip:
                 continue
-            # 跳过包含过滤词的行
             skip = False
             for pat in filter_patterns:
                 if pat in line:
@@ -436,11 +398,7 @@ class PushNotifier:
                     break
             if skip:
                 continue
-            # 跳过只有分隔符的行
-            if line_strip in ['---', '***', '___', '===']:
-                continue
-            # 跳过只有数字或标点的行
-            if all(c in '0123456789.、，。！？' for c in line_strip):
+            if line_strip in ['---', '***', '___']:
                 continue
             cleaned.append(line)
         return '\n'.join(cleaned)
@@ -475,10 +433,7 @@ class PushNotifier:
                 intensity = data.get('intensity_score', 0)
                 emotion = data.get('emotion_label', '中性')
                 bar = "█" * int(intensity) + "░" * (10 - int(intensity))
-                summary = data.get('summary', '')
                 lines.append(f"  {sec}: {bar} {intensity}/10 ({emotion})")
-                if summary:
-                    lines.append(f"     └─ {summary[:40]}...")
 
         if hasattr(result, 'agent_analysis') and result.agent_analysis:
             agent_data = result.agent_analysis
