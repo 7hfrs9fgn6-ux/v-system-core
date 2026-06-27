@@ -59,7 +59,6 @@ def save_market_data(data: StandardMarketData):
     try:
         os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
         with open(CACHE_FILE, 'w') as f:
-            # 手动序列化 Pydantic 对象
             json.dump(data.dict(), f, default=str)
         logger.info(f"✅ 市场数据已缓存到 {CACHE_FILE}")
     except Exception as e:
@@ -73,7 +72,6 @@ def load_market_data() -> StandardMarketData:
     try:
         with open(CACHE_FILE, 'r') as f:
             data_dict = json.load(f)
-        # 重新构建 StandardMarketData 对象
         sectors = [SectorSignal(**s) for s in data_dict['sectors']]
         return StandardMarketData(
             timestamp=data_dict['timestamp'],
@@ -100,23 +98,25 @@ class RealDataAdapter:
     def fetch_all(self) -> StandardMarketData:
         logger.info("🌐 开始获取数据...")
 
-        # ✅ 特殊处理：post 阶段优先使用缓存（如果存在）
+        # ✅ post 阶段：完全使用缓存，不发起网络请求
         if self.phase == "post":
             cached = load_market_data()
             if cached is not None:
-                logger.info("📂 post 阶段使用缓存市场数据（跳过 AKShare）")
+                logger.info("📂 post 阶段使用缓存市场数据")
                 self.data_source = "Cache"
-                # 更新大盘数据（缓存中已有）
                 return cached
+            else:
+                logger.warning("⚠️ post 阶段无缓存，使用模拟数据（避免网络超时）")
+                self.data_source = "Simulated"
+                return self._fetch_simulated()
 
-        # 正常流程：尝试 AKShare
+        # ✅ 其他阶段：正常获取
         try:
             logger.info("📊 使用 AKShare（主数据源）获取行业数据...")
             self.data_source = "AKShare"
             result = self._fetch_from_akshare()
-            # 成功后保存缓存（仅 post 阶段保存，其他阶段不保存以保持数据新鲜）
-            if self.phase == "post":
-                save_market_data(result)
+            # 保存缓存以供 post 使用
+            save_market_data(result)
             return result
         except Exception as e:
             logger.warning(f"⚠️ AKShare 主流程失败 ({e})，尝试备用 Tushare...")
@@ -125,12 +125,11 @@ class RealDataAdapter:
                     logger.info("📊 降级到 Tushare（备用数据源）...")
                     self.data_source = "Tushare"
                     result = self._fetch_from_tushare()
-                    if self.phase == "post":
-                        save_market_data(result)
+                    save_market_data(result)
                     return result
                 except Exception as e2:
                     logger.warning(f"⚠️ Tushare 也失败 ({e2})，使用模拟值兜底")
-            # 如果都失败，尝试加载缓存（如果有）
+            # 如果都失败，尝试加载缓存
             cached = load_market_data()
             if cached is not None:
                 logger.warning("⚠️ 所有数据源失败，使用缓存数据")
@@ -140,7 +139,7 @@ class RealDataAdapter:
             return self._fetch_simulated()
 
     # --------------------------------------------------------------
-    # 以下方法与之前稳定版相同（省略重复代码，实际需保留）
+    # 以下方法与稳定版保持一致，仅添加 post 阶段特殊处理
     # --------------------------------------------------------------
     def _get_target_date(self):
         phase_days_back = {"pre": 1, "intraday_a": 0, "intraday_b": 0, "post": 0, "night": 0}
@@ -225,10 +224,10 @@ class RealDataAdapter:
             for future in future_to_name:
                 name = future_to_name[future]
                 try:
-                    result = future.result(timeout=15)
+                    result = future.result(timeout=12)  # 缩短超时到12秒
                     sectors.append(result)
                 except FuturesTimeoutError:
-                    logger.warning(f"⚠️ {name} 获取超时（15s），使用随机值")
+                    logger.warning(f"⚠️ {name} 获取超时（12s），使用随机值")
                     sectors.append(self._make_fallback_sector(name))
                 except Exception as e:
                     logger.warning(f"⚠️ {name} 获取异常 ({e})，使用随机值")
