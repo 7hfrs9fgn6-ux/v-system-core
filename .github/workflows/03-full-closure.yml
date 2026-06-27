@@ -22,7 +22,6 @@ concurrency:
 env:
   TZ: Asia/Shanghai
   PYTHON_VERSION: '3.11'
-  # 全部密钥
   PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
   TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
   DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -35,12 +34,14 @@ env:
 jobs:
   daily-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write               # ✅ 授予写入权限
     timeout-minutes: 15
     steps:
       - name: ① 检出代码
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # ✅ 获取完整历史，便于提交
+          fetch-depth: 0
 
       - name: ② 设置 Python
         uses: actions/setup-python@v5
@@ -71,11 +72,8 @@ jobs:
       - name: ⑦ 自动提交并推送 memory_data 变更
         if: always()
         run: |
-          # 配置git用户
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # 检查memory_data目录是否有变更
           if [ -d "memory_data" ] && git status --porcelain memory_data/ | grep -q .; then
             echo "📁 检测到 memory_data 目录有变更，准备提交..."
             git add memory_data/
@@ -86,7 +84,7 @@ jobs:
             echo "📁 memory_data 目录无变更或不存在，跳过提交"
           fi
 
-      - name: ⑧ 上传宏观缓存（备选下载方案）
+      - name: ⑧ 上传宏观缓存（备选）
         uses: actions/upload-artifact@v4
         with:
           name: macro-cache
