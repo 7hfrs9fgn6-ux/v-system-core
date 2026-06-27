@@ -38,3 +38,6 @@ class SignalResult(BaseModel):
     relative_strength: Optional[Dict[str, Any]] = None
     # ✅ 新增：智能代理分析结果
     agent_analysis: Optional[Dict[str, Any]] = None
+    _indices: Optional[Dict[str, Any]] = None
+    _market_stats: Optional[Dict[str, Any]] = None
+    _sector_flow: Optional[Dict[str, Any]] = None
