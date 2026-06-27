@@ -2,6 +2,7 @@ import os
 import random
 import logging
 import time
+import json
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from output_layer.signal_result import StandardMarketData, SectorSignal, FreshnessLevel
@@ -22,22 +23,12 @@ THRESHOLD_MAP = {
 }
 
 AK_CODE_MAP = {
-    "电子": "801080",
-    "计算机": "801750",
-    "通信": "801770",
-    "传媒": "801760",
-    "医药生物": "801150",
-    "食品饮料": "801120",
-    "家用电器": "801110",
-    "电力设备": "801730",
-    "汽车": "801880",
-    "国防军工": "801740",
-    "银行": "801780",
-    "非银金融": "801790",
-    "公用事业": "801160",
-    "煤炭": "801950",
-    "石油石化": "801960",
+    "电子": "801080", "计算机": "801750", "通信": "801770", "传媒": "801760", "医药生物": "801150",
+    "食品饮料": "801120", "家用电器": "801110", "电力设备": "801730", "汽车": "801880", "国防军工": "801740",
+    "银行": "801780", "非银金融": "801790", "公用事业": "801160", "煤炭": "801950", "石油石化": "801960",
 }
+
+CACHE_FILE = "memory_data/last_market_data.json"
 
 
 class RateLimiter:
@@ -63,42 +54,96 @@ class RateLimiter:
         return max(0, wait_time)
 
 
+def save_market_data(data: StandardMarketData):
+    """保存成功获取的市场数据到缓存"""
+    try:
+        os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
+        with open(CACHE_FILE, 'w') as f:
+            # 手动序列化 Pydantic 对象
+            json.dump(data.dict(), f, default=str)
+        logger.info(f"✅ 市场数据已缓存到 {CACHE_FILE}")
+    except Exception as e:
+        logger.warning(f"⚠️ 缓存市场数据失败: {e}")
+
+
+def load_market_data() -> StandardMarketData:
+    """从缓存加载市场数据"""
+    if not os.path.exists(CACHE_FILE):
+        return None
+    try:
+        with open(CACHE_FILE, 'r') as f:
+            data_dict = json.load(f)
+        # 重新构建 StandardMarketData 对象
+        sectors = [SectorSignal(**s) for s in data_dict['sectors']]
+        return StandardMarketData(
+            timestamp=data_dict['timestamp'],
+            freshness=FreshnessLevel(data_dict['freshness']),
+            sectors=sectors,
+            index_trend=data_dict['index_trend'],
+            north_flow=data_dict.get('north_flow')
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ 加载缓存市场数据失败: {e}")
+        return None
+
+
 class RealDataAdapter:
     def __init__(self, phase: str = "pre"):
         self.phase = phase
         self.tushare_token = os.environ.get("TUSHARE_TOKEN")
         self.use_tushare = bool(self.tushare_token and self.tushare_token != "dummy")
         self.data_source = "AKShare"
-        self._rate_limiter = RateLimiter(max_calls=60, period=60)  # 降低到60次/分钟
+        self._rate_limiter = RateLimiter(max_calls=60, period=60)
         self._index_close = 0
         self._index_pct = 0
 
     def fetch_all(self) -> StandardMarketData:
         logger.info("🌐 开始获取数据...")
+
+        # ✅ 特殊处理：post 阶段优先使用缓存（如果存在）
+        if self.phase == "post":
+            cached = load_market_data()
+            if cached is not None:
+                logger.info("📂 post 阶段使用缓存市场数据（跳过 AKShare）")
+                self.data_source = "Cache"
+                # 更新大盘数据（缓存中已有）
+                return cached
+
+        # 正常流程：尝试 AKShare
         try:
             logger.info("📊 使用 AKShare（主数据源）获取行业数据...")
             self.data_source = "AKShare"
-            return self._fetch_from_akshare()
+            result = self._fetch_from_akshare()
+            # 成功后保存缓存（仅 post 阶段保存，其他阶段不保存以保持数据新鲜）
+            if self.phase == "post":
+                save_market_data(result)
+            return result
         except Exception as e:
             logger.warning(f"⚠️ AKShare 主流程失败 ({e})，尝试备用 Tushare...")
             if self.use_tushare:
                 try:
                     logger.info("📊 降级到 Tushare（备用数据源）...")
                     self.data_source = "Tushare"
-                    return self._fetch_from_tushare()
+                    result = self._fetch_from_tushare()
+                    if self.phase == "post":
+                        save_market_data(result)
+                    return result
                 except Exception as e2:
                     logger.warning(f"⚠️ Tushare 也失败 ({e2})，使用模拟值兜底")
+            # 如果都失败，尝试加载缓存（如果有）
+            cached = load_market_data()
+            if cached is not None:
+                logger.warning("⚠️ 所有数据源失败，使用缓存数据")
+                self.data_source = "Cache"
+                return cached
             self.data_source = "Simulated"
             return self._fetch_simulated()
 
+    # --------------------------------------------------------------
+    # 以下方法与之前稳定版相同（省略重复代码，实际需保留）
+    # --------------------------------------------------------------
     def _get_target_date(self):
-        phase_days_back = {
-            "pre": 1,
-            "intraday_a": 0,
-            "intraday_b": 0,
-            "post": 0,
-            "night": 0,
-        }
+        phase_days_back = {"pre": 1, "intraday_a": 0, "intraday_b": 0, "post": 0, "night": 0}
         days_back = phase_days_back.get(self.phase, 0)
         target = datetime.now() - timedelta(days=days_back)
         while target.weekday() >= 5:
@@ -109,38 +154,23 @@ class RealDataAdapter:
         threshold = THRESHOLD_MAP[name]
         drawdown = round(random.uniform(15.0, 40.0), 1)
         excess = drawdown - threshold
-        if excess >= 10:
-            level = 4
-        elif excess >= 5:
-            level = 3
-        elif excess >= 0:
-            level = 2
-        elif excess >= -5:
-            level = 1
-        elif excess >= -10:
-            level = -1
-        else:
-            level = -2
-        return SectorSignal(
-            name=name,
-            signal_level=level,
-            drawdown=drawdown,
-            threshold=threshold,
-            key_driver="兜底值" if level > 0 else None
-        )
+        if excess >= 10: level = 4
+        elif excess >= 5: level = 3
+        elif excess >= 0: level = 2
+        elif excess >= -5: level = 1
+        elif excess >= -10: level = -1
+        else: level = -2
+        return SectorSignal(name=name, signal_level=level, drawdown=drawdown, threshold=threshold, key_driver="兜底值" if level > 0 else None)
 
     def _find_column(self, df, candidates):
         if df is None or df.empty:
             return None
         for c in df.columns:
-            for candidate in candidates:
-                if candidate in c or c in candidate:
+            for cand in candidates:
+                if cand in c or c in cand:
                     return c
         return None
 
-    # ============================================================
-    # 主数据源：AKShare（简化稳定版）
-    # ============================================================
     def _fetch_from_akshare(self) -> StandardMarketData:
         import akshare as ak
         target_date = self._get_target_date()
@@ -187,19 +217,15 @@ class RealDataAdapter:
         except:
             pass
 
-        # 各板块（简化：并发数2，超时15秒，不重试）
+        # 各板块
         sectors = []
         logger.info("📊 AKShare 获取各板块52周回撤...")
-
         with ThreadPoolExecutor(max_workers=2) as executor:
-            future_to_name = {
-                executor.submit(self._fetch_single_sector, name): name
-                for name in SECTOR_NAMES
-            }
+            future_to_name = {executor.submit(self._fetch_single_sector, name): name for name in SECTOR_NAMES}
             for future in future_to_name:
                 name = future_to_name[future]
                 try:
-                    result = future.result(timeout=15)  # 15秒超时
+                    result = future.result(timeout=15)
                     sectors.append(result)
                 except FuturesTimeoutError:
                     logger.warning(f"⚠️ {name} 获取超时（15s），使用随机值")
@@ -219,16 +245,12 @@ class RealDataAdapter:
         )
 
     def _fetch_single_sector(self, name: str) -> SectorSignal:
-        """获取单个板块数据（无重试，一次失败即返回兜底值）"""
         import akshare as ak
         code = AK_CODE_MAP.get(name)
         if not code:
             return self._make_fallback_sector(name)
-
-        # 限流
         if not self._rate_limiter.acquire():
             time.sleep(self._rate_limiter.wait())
-
         try:
             df = ak.index_hist_sw(symbol=code)
             if df is not None and not df.empty:
@@ -248,44 +270,25 @@ class RealDataAdapter:
                 drawdown = round(random.uniform(15.0, 40.0), 1)
                 logger.warning(f"⚠️ {name}: AKShare 无数据")
         except Exception as e:
-            # 任何异常直接返回兜底值
             logger.warning(f"⚠️ {name}: AKShare 异常 ({e})，使用随机值")
             drawdown = round(random.uniform(15.0, 40.0), 1)
 
         threshold = THRESHOLD_MAP[name]
         excess = drawdown - threshold
-        if excess >= 10:
-            level = 4
-        elif excess >= 5:
-            level = 3
-        elif excess >= 0:
-            level = 2
-        elif excess >= -5:
-            level = 1
-        elif excess >= -10:
-            level = -1
-        else:
-            level = -2
+        if excess >= 10: level = 4
+        elif excess >= 5: level = 3
+        elif excess >= 0: level = 2
+        elif excess >= -5: level = 1
+        elif excess >= -10: level = -1
+        else: level = -2
+        return SectorSignal(name=name, signal_level=level, drawdown=drawdown, threshold=threshold, key_driver="AKShare" if level > 0 else None)
 
-        return SectorSignal(
-            name=name,
-            signal_level=level,
-            drawdown=drawdown,
-            threshold=threshold,
-            key_driver="AKShare" if level > 0 else None
-        )
-
-    # ============================================================
-    # 备用数据源：Tushare
-    # ============================================================
     def _fetch_from_tushare(self) -> StandardMarketData:
         import tushare as ts
         ts.set_token(self.tushare_token)
         pro = ts.pro_api()
-
         target_date = self._get_target_date()
         date_str = target_date.strftime("%Y%m%d")
-
         try:
             index_df = pro.index_daily(ts_code="000001.SH", start_date=date_str, end_date=date_str)
             if index_df.empty:
@@ -307,13 +310,9 @@ class RealDataAdapter:
         except:
             pass
 
-        # 行业数据降级到 AKShare（但会使用上面的优化逻辑）
         logger.info("📊 Tushare 备用模式：行业数据从 AKShare 获取...")
         return self._fetch_from_akshare()
 
-    # ============================================================
-    # 兜底：模拟值
-    # ============================================================
     def _fetch_simulated(self) -> StandardMarketData:
         target_date = self._get_target_date()
         sectors = []
@@ -321,30 +320,12 @@ class RealDataAdapter:
             drawdown = round(random.uniform(15.0, 40.0), 1)
             threshold = THRESHOLD_MAP[name]
             excess = drawdown - threshold
-            if excess >= 10:
-                level = 4
-            elif excess >= 5:
-                level = 3
-            elif excess >= 0:
-                level = 2
-            elif excess >= -5:
-                level = 1
-            elif excess >= -10:
-                level = -1
-            else:
-                level = -2
-            sectors.append(SectorSignal(
-                name=name,
-                signal_level=level,
-                drawdown=drawdown,
-                threshold=threshold,
-                key_driver="模拟值" if level > 0 else None
-            ))
+            if excess >= 10: level = 4
+            elif excess >= 5: level = 3
+            elif excess >= 0: level = 2
+            elif excess >= -5: level = 1
+            elif excess >= -10: level = -1
+            else: level = -2
+            sectors.append(SectorSignal(name=name, signal_level=level, drawdown=drawdown, threshold=threshold, key_driver="模拟值" if level > 0 else None))
         freshness = FreshnessLevel.STALE
-        return StandardMarketData(
-            timestamp=target_date.strftime("%Y-%m-%d %H:%M:%S"),
-            freshness=freshness,
-            sectors=sectors,
-            index_trend="range",
-            north_flow=None
-        )
+        return StandardMarketData(timestamp=target_date.strftime("%Y-%m-%d %H:%M:%S"), freshness=freshness, sectors=sectors, index_trend="range", north_flow=None)
