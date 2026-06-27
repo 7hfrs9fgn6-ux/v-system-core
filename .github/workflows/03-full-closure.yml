@@ -34,7 +34,7 @@ env:
 jobs:
   daily-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 60   # ✅ 临时提高到60分钟，确保首次运行成功
+    timeout-minutes: 60
     steps:
       - name: ① 检出代码
         uses: actions/checkout@v4
@@ -65,7 +65,7 @@ jobs:
         run: |
           python scripts/run_with_push.py --phase ${{ steps.get_phase.outputs.phase }}
 
-       - name: ⑦ 上传宏观缓存（可选，供下载）
+      - name: ⑦ 上传宏观缓存（可选，供下载）
         uses: actions/upload-artifact@v4
         with:
           name: macro-cache
