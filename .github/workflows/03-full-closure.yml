@@ -22,23 +22,19 @@ concurrency:
 env:
   TZ: Asia/Shanghai
   PYTHON_VERSION: '3.11'
-  # ✅ 所有密钥都必须在这里显式声明
   PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
   TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
   DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
   NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
   NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
-  # ✅ 新增：天行数据 API Key
   TIANXING_API_KEY: ${{ secrets.TIANXING_API_KEY }}
-  # ✅ 新增：搜索 API Key（NewsAPI 等）
   SEARCH_API_KEY: ${{ secrets.SEARCH_API_KEY }}
-  # ✅ 新增：AlphaFeed API Key
   ALPHAFEED_API_KEY: ${{ secrets.ALPHAFEED_API_KEY }}
 
 jobs:
   daily-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60   # ✅ 临时提高到60分钟，确保首次运行成功
     steps:
       - name: ① 检出代码
         uses: actions/checkout@v4
