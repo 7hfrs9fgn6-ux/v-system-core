@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-宏观数据采集模块（优化版：每天仅获取1次）
-- 缓存优先，减少网络请求
-- 每日首次运行获取完整数据，后续复用缓存
-- 超时控制，避免卡死
+宏观数据采集模块（优化版）
+- 减少重试次数，缩短超时时间
+- 缓存优先，避免重复网络请求
+- 彻底禁用 tqdm 进度条
 """
 
 import os
@@ -27,12 +27,9 @@ class MacroCollector:
     def __init__(self):
         self._cache = MacroCache()
         self._cache_ttl = 3600
-        self._retry_count = 1               # 重试次数
+        self._retry_count = 1               # ✅ 从2次减为1次
         self._retry_delay = [2]             # 重试等待2秒
-        self._timeout = 8                   # 超时8秒
-        # ✅ 每天仅获取1次的标记
-        self._today_fetched = False
-        self._today_date = datetime.now().date()
+        self._timeout = 8                   # ✅ 从10秒减为8秒
         logger.info(f"📁 宏观缓存目录: {self._cache.storage_dir}")
 
     # ---------- 通用辅助 ----------
@@ -400,71 +397,21 @@ class MacroCollector:
             return result
 
     # ============================================================
-    # 7. 宏观快照（每天仅获取1次）
+    # 7. 宏观快照与格式化
     # ============================================================
-    def _is_today_fetched(self) -> bool:
-        """检查今天是否已经获取过宏观数据"""
-        today = datetime.now().date()
-        if today != self._today_date:
-            self._today_date = today
-            self._today_fetched = False
-        return self._today_fetched
-
-    def _mark_today_fetched(self):
-        """标记今天已获取宏观数据"""
-        self._today_fetched = True
-        self._today_date = datetime.now().date()
-        logger.info("✅ 今日宏观数据已获取（今日不再重复获取）")
-
-    def _load_snapshot_from_cache(self) -> Optional[Dict]:
-        """从缓存加载宏观快照"""
+    def get_macro_snapshot(self) -> Dict:
         cache_file = os.path.join(self._cache.storage_dir, "macro_snapshot.json")
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, 'r') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                if data.get('_cache_time'):
+                    cache_time = datetime.fromisoformat(data['_cache_time'])
+                    if (datetime.now() - cache_time).total_seconds() < 7200:
+                        logger.info(f"✅ 从存储缓存获取宏观快照: {cache_file}")
+                        return data.get('data', {})
             except:
                 pass
-        return None
-
-    def get_macro_snapshot(self) -> Dict:
-        """
-        获取宏观数据快照（每天仅获取1次）
-        如果今天已获取过，直接返回缓存
-        """
-        # ✅ 如果今天已获取过，直接返回缓存
-        if self._is_today_fetched():
-            logger.info("📦 今日宏观数据已获取，从缓存返回")
-            cached = self._load_snapshot_from_cache()
-            if cached:
-                return cached.get('data', {})
-            else:
-                # 理论上不应该出现，但以防万一
-                logger.warning("⚠️ 缓存不存在，重新获取")
-                return self._fetch_all_macro_data()
-
-        # 尝试从缓存加载（如果今天没获取过，但缓存存在）
-        cached = self._load_snapshot_from_cache()
-        if cached:
-            cache_time = cached.get('_cache_time', '')
-            if cache_time:
-                try:
-                    cache_dt = datetime.fromisoformat(cache_time)
-                    if cache_dt.date() == datetime.now().date():
-                        logger.info("📦 今日缓存已存在，直接使用")
-                        self._mark_today_fetched()
-                        return cached.get('data', {})
-                except:
-                    pass
-
-        # 真正获取数据
-        logger.info("🌐 今日首次获取宏观数据（后续将使用缓存）")
-        result = self._fetch_all_macro_data()
-        self._mark_today_fetched()
-        return result
-
-    def _fetch_all_macro_data(self) -> Dict:
-        """实际获取所有宏观数据（仅当今日首次运行时调用）"""
         result = {
             "us_market": self.get_us_market(),
             "asia_market": self.get_asia_market(),
@@ -474,26 +421,17 @@ class MacroCollector:
             "a50_futures": self.get_a50_futures(),
             "timestamp": datetime.now().isoformat()
         }
-
-        # 保存到缓存
-        cache_file = os.path.join(self._cache.storage_dir, "macro_snapshot.json")
         try:
             with open(cache_file, 'w') as f:
                 json.dump({'_cache_time': datetime.now().isoformat(), 'data': result}, f, ensure_ascii=False, indent=2)
             logger.info(f"✅ 宏观快照已保存到: {cache_file}")
         except Exception as e:
             logger.warning(f"保存宏观快照失败: {e}")
-
         return result
 
-    # ============================================================
-    # 8. 格式化宏观数据（供推送使用）
-    # ============================================================
     def format_for_push(self) -> Dict:
-        """获取并格式化宏观数据，供推送使用"""
         snapshot = self.get_macro_snapshot()
-
-        formatted = {
+        return {
             "us_market": self._format_us_market(snapshot.get("us_market", {})),
             "asia_market": self._format_asia_market(snapshot.get("asia_market", {})),
             "europe_market": self._format_europe_market(snapshot.get("europe_market", {})),
@@ -502,7 +440,6 @@ class MacroCollector:
             "a50_futures": self._format_a50(snapshot.get("a50_futures", {})),
             "timestamp": snapshot.get("timestamp", "")
         }
-        return formatted
 
     def _format_us_market(self, data: Dict) -> Dict:
         result = {"indices": [], "tech_giants": [], "semiconductor": None}
