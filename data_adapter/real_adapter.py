@@ -2,7 +2,6 @@ import os
 import random
 import logging
 import time
-import json
 from datetime import datetime, timedelta
 from output_layer.signal_result import StandardMarketData, SectorSignal, FreshnessLevel
 
@@ -21,12 +20,23 @@ THRESHOLD_MAP = {
     "银行": 20.0, "非银金融": 20.0, "公用事业": 15.0, "煤炭": 20.0, "石油石化": 20.0
 }
 
+# AKShare 申万行业代码（纯数字）
 AK_CODE_MAP = {
-    "电子": "801080", "计算机": "801750", "通信": "801770",
-    "传媒": "801760", "医药生物": "801150", "食品饮料": "801120",
-    "家用电器": "801110", "电力设备": "801730", "汽车": "801880",
-    "国防军工": "801740", "银行": "801780", "非银金融": "801790",
-    "公用事业": "801160", "煤炭": "801950", "石油石化": "801960",
+    "电子": "801080",
+    "计算机": "801750",
+    "通信": "801770",
+    "传媒": "801760",
+    "医药生物": "801150",
+    "食品饮料": "801120",
+    "家用电器": "801110",
+    "电力设备": "801730",
+    "汽车": "801880",
+    "国防军工": "801740",
+    "银行": "801780",
+    "非银金融": "801790",
+    "公用事业": "801160",
+    "煤炭": "801950",
+    "石油石化": "801960",
 }
 
 
@@ -53,20 +63,18 @@ class RateLimiter:
         return max(0, wait_time)
 
 
-def retry_on_failure(max_attempts=5, delays=[0, 1, 2, 4, 8]):
+def retry_on_failure(max_attempts=3, delays=[0, 1, 2]):
     def decorator(func):
         def wrapper(*args, **kwargs):
-            last_exception = None
             for attempt in range(max_attempts):
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
-                    last_exception = e
                     if attempt == max_attempts - 1:
                         raise
                     logger.warning(f"⚠️ 重试 {attempt+1}/{max_attempts}: {e}，等待 {delays[attempt]}s")
                     time.sleep(delays[attempt])
-            raise last_exception
+            return None
         return wrapper
     return decorator
 
@@ -144,10 +152,7 @@ class RealDataAdapter:
                     return c
         return None
 
-    # ============================================================
-    # ✅ 增强容错的 AKShare 获取
-    # ============================================================
-    @retry_on_failure(max_attempts=5, delays=[0, 1, 2, 4, 8])
+    @retry_on_failure(max_attempts=3, delays=[0, 1, 2])
     def _fetch_from_akshare(self) -> StandardMarketData:
         import akshare as ak
         target_date = self._get_target_date()
