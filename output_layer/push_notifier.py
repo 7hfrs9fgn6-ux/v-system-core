@@ -85,9 +85,13 @@ class PushNotifier:
             self._store_to_notion(result, phase)
             return False
 
-        if hasattr(result, '_index_data'):
+        # ✅ 安全获取大盘数据
+        if hasattr(result, '_index_data') and result._index_data is not None:
             self._index_close = result._index_data.get('close', 0)
             self._index_pct = result._index_data.get('pct', 0)
+        else:
+            self._index_close = 0
+            self._index_pct = 0
 
         self._macro_data = getattr(result, '_macro_data', {})
         self._indices = getattr(result, '_indices', {})
@@ -137,18 +141,22 @@ class PushNotifier:
     def _format_message(self, result: SignalResult, phase: str) -> str:
         if phase == "night":
             return self._format_night_message(result)
+        # 对于有研报级Agent分析的情况，使用P3格式（已过滤内部信息）
+        if hasattr(result, 'agent_analysis') and result.agent_analysis:
+            agent_data = result.agent_analysis
+            if agent_data.get('status') in ('success', 'warning') and agent_data.get('response'):
+                return self._format_structured_report(result, phase)
+        # 否则使用结构化展示（基于信号数据）
         return self._format_structured_report(result, phase)
 
     # ============================================================
-    # 核心：结构化研报级推送
+    # 核心：结构化研报级推送（融合旧版清晰结构）
     # ============================================================
     def _format_structured_report(self, result: SignalResult, phase: str) -> str:
+        """生成结构化研报级推送（隐藏内部信息，展示关键数据）"""
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
         phase_text = phase_info.get("name", phase)
         emoji = phase_info.get("emoji", "📊")
-
-        signal_dict = {s.name: s for s in result.signals}
-        holding_sector_names = list(set(self.holding_sectors))
 
         lines = []
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -157,6 +165,7 @@ class PushNotifier:
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         # ---------- 1. 市场概览 ----------
+        # 大盘指数
         if self._index_close > 0:
             arrow = "📈" if self._index_pct > 0 else "📉" if self._index_pct < 0 else "➡️"
             lines.append(f"【📊 上证指数】{self._index_close:.2f}  {arrow} {self._index_pct:+.2f}%")
@@ -169,6 +178,7 @@ class PushNotifier:
             else:
                 lines.append("   └─ 小幅波动，正常整理")
 
+        # 涨跌家数
         if self._market_stats:
             stats = self._market_stats
             up = stats.get('up', 0)
@@ -186,10 +196,14 @@ class PushNotifier:
         lines.append("")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        # ---------- 2. 信号汇总 ----------
+        # ---------- 2. 信号汇总（按等级分组） ----------
+        signal_dict = {s.name: s for s in result.signals}
+        holding_sector_names = list(set(self.holding_sectors))
+
         strong_buy = [s for s in result.signals if s.signal_level >= 3]
         watch = [s for s in result.signals if 1 <= s.signal_level < 3]
         risk = [s for s in result.signals if s.signal_level < 0]
+
         strong_buy.sort(key=lambda x: (-x.signal_level, x.name))
         watch.sort(key=lambda x: (-x.signal_level, x.name))
         risk.sort(key=lambda x: (x.signal_level, x.name))
@@ -212,7 +226,7 @@ class PushNotifier:
                     lines.append(f"    └─ 消息面: {intensity}/10 ({emotion})")
                 lines.append("")
         else:
-            lines.append("【🟢 机会信号】无\n")
+            lines.append("【🟢 机会信号】无")
 
         if watch:
             lines.append("【🟡 观察中】")
@@ -232,7 +246,7 @@ class PushNotifier:
                     lines.append(f"    └─ 消息面: {intensity}/10 ({emotion})")
                 lines.append("")
         else:
-            lines.append("【🟡 观察中】无\n")
+            lines.append("【🟡 观察中】无")
 
         if risk:
             lines.append("【🔴 风险信号】")
@@ -252,7 +266,7 @@ class PushNotifier:
                     lines.append(f"    └─ 消息面: {intensity}/10 ({emotion})")
                 lines.append("")
         else:
-            lines.append("【🔴 风险信号】无\n")
+            lines.append("【🔴 风险信号】无")
 
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
@@ -358,32 +372,11 @@ class PushNotifier:
     # ============================================================
     def _clean_agent_response(self, response: str) -> str:
         filter_patterns = [
-            "好的，现在我来",
-            "现在我来获取",
-            "接下来我来",
-            "让我来",
-            "我先",
-            "data already collected",
-            "now I will",
-            "let me",
-            "I'll get",
-            "I will",
-            "proceeding to",
-            "获取更多补充数据",
-            "我们开始",
-            "先获取",
-            "好的，以下",
-            "正在获取",
-            "我来生成",
-            "现在开始",
-            "首先",
-            "然后",
-            "接着",
-            "我再",
-            "还需要",
-            "为了获取",
-            "我们看看",
-            "接下来"
+            "好的，现在我来", "现在我来获取", "接下来我来", "让我来", "我先",
+            "data already collected", "now I will", "let me", "I'll get", "I will",
+            "proceeding to", "获取更多补充数据", "我们开始", "先获取",
+            "好的，以下", "正在获取", "我来生成", "现在开始", "首先",
+            "然后", "接着", "我再", "还需要", "为了获取", "我们看看", "接下来"
         ]
         lines = response.split('\n')
         cleaned = []
