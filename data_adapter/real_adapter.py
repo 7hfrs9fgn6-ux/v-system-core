@@ -2,7 +2,9 @@ import os
 import random
 import logging
 import time
+import json
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from output_layer.signal_result import StandardMarketData, SectorSignal, FreshnessLevel
 
 logging.basicConfig(level=logging.INFO)
@@ -63,18 +65,20 @@ class RateLimiter:
         return max(0, wait_time)
 
 
-def retry_on_failure(max_attempts=3, delays=[0, 1, 2]):
+def retry_on_failure(max_attempts=5, delays=[0, 1, 2, 4, 8]):
     def decorator(func):
         def wrapper(*args, **kwargs):
+            last_exception = None
             for attempt in range(max_attempts):
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
+                    last_exception = e
                     if attempt == max_attempts - 1:
                         raise
                     logger.warning(f"⚠️ 重试 {attempt+1}/{max_attempts}: {e}，等待 {delays[attempt]}s")
                     time.sleep(delays[attempt])
-            return None
+            raise last_exception
         return wrapper
     return decorator
 
@@ -152,7 +156,10 @@ class RealDataAdapter:
                     return c
         return None
 
-    @retry_on_failure(max_attempts=3, delays=[0, 1, 2])
+    # ============================================================
+    # 主数据源：AKShare（增强重试）
+    # ============================================================
+    @retry_on_failure(max_attempts=3, delays=[0, 2, 5])
     def _fetch_from_akshare(self) -> StandardMarketData:
         import akshare as ak
         target_date = self._get_target_date()
@@ -199,68 +206,26 @@ class RealDataAdapter:
         except:
             pass
 
-        # 各板块
+        # 各板块（并发获取，每个板块内部有重试）
         sectors = []
         logger.info("📊 AKShare 获取各板块52周回撤...")
 
-        for name in SECTOR_NAMES:
-            code = AK_CODE_MAP.get(name)
-            if not code:
-                sectors.append(self._make_fallback_sector(name))
-                continue
-
-            if not self._rate_limiter.acquire():
-                time.sleep(self._rate_limiter.wait())
-
-            try:
-                df = ak.index_hist_sw(symbol=code)
-                if df is not None and not df.empty:
-                    high_col = self._find_column(df, ['高', 'high'])
-                    close_col = self._find_column(df, ['收', 'close'])
-                    if high_col and close_col:
-                        high_52w = df[high_col].max()
-                        current = df[close_col].iloc[-1]
-                        if high_52w > 0:
-                            drawdown = round((high_52w - current) / high_52w * 100, 1)
-                            logger.info(f"   ✅ {name}: 52周高 {high_52w:.2f}, 现价 {current:.2f}, 回撤 {drawdown}%")
-                        else:
-                            drawdown = round(random.uniform(15.0, 40.0), 1)
-                    else:
-                        drawdown = round(random.uniform(15.0, 40.0), 1)
-                else:
-                    drawdown = round(random.uniform(15.0, 40.0), 1)
-                    logger.warning(f"⚠️ {name}: AKShare 无数据")
-            except Exception as e:
-                # 捕获异常并打印响应内容（如果是 JSON 解析错误）
-                error_msg = str(e)
-                if "Expecting value" in error_msg:
-                    logger.error(f"❌ {name}: AKShare 返回非 JSON 数据，可能是服务器过载")
-                else:
-                    logger.warning(f"⚠️ {name}: AKShare 异常 ({e})")
-                drawdown = round(random.uniform(15.0, 40.0), 1)
-
-            threshold = THRESHOLD_MAP[name]
-            excess = drawdown - threshold
-            if excess >= 10:
-                level = 4
-            elif excess >= 5:
-                level = 3
-            elif excess >= 0:
-                level = 2
-            elif excess >= -5:
-                level = 1
-            elif excess >= -10:
-                level = -1
-            else:
-                level = -2
-
-            sectors.append(SectorSignal(
-                name=name,
-                signal_level=level,
-                drawdown=drawdown,
-                threshold=threshold,
-                key_driver="AKShare" if level > 0 else None
-            ))
+        with ThreadPoolExecutor(max_workers=3) as executor:  # 降低并发数，减少服务器压力
+            future_to_name = {
+                executor.submit(self._fetch_single_sector_with_retry, name): name
+                for name in SECTOR_NAMES
+            }
+            for future in future_to_name:
+                name = future_to_name[future]
+                try:
+                    result = future.result(timeout=20)  # 增加超时到20秒
+                    sectors.append(result)
+                except FuturesTimeoutError:
+                    logger.warning(f"⚠️ {name} 获取超时，使用随机值")
+                    sectors.append(self._make_fallback_sector(name))
+                except Exception as e:
+                    logger.warning(f"⚠️ {name} 获取异常 ({e})，使用随机值")
+                    sectors.append(self._make_fallback_sector(name))
 
         freshness = FreshnessLevel.STALE if self.phase in ["pre", "night"] else FreshnessLevel.FRESH
         logger.info(f"✅ AKShare 数据获取完成，共 {len(sectors)} 个板块")
@@ -272,8 +237,86 @@ class RealDataAdapter:
             north_flow=north_flow
         )
 
+    def _fetch_single_sector_with_retry(self, name: str) -> SectorSignal:
+        """单个板块获取，内部重试5次，专门处理 JSON 解析错误"""
+        max_attempts = 5
+        delays = [0, 1, 2, 4, 8]
+        last_exception = None
+        for attempt in range(max_attempts):
+            try:
+                return self._fetch_single_sector(name)
+            except Exception as e:
+                last_exception = e
+                # 如果是 JSON 解析错误，给出更明确的提示
+                if "Expecting value" in str(e):
+                    logger.warning(f"⚠️ {name}: AKShare 返回非 JSON 数据 (尝试 {attempt+1}/{max_attempts})")
+                else:
+                    logger.warning(f"⚠️ {name}: AKShare 异常 ({e}) (尝试 {attempt+1}/{max_attempts})")
+                if attempt < max_attempts - 1:
+                    time.sleep(delays[attempt])
+                    # 限流等待
+                    if not self._rate_limiter.acquire():
+                        wait = self._rate_limiter.wait()
+                        logger.info(f"⏳ 限流等待 {wait:.1f}s")
+                        time.sleep(wait)
+        # 所有重试失败，返回兜底值
+        logger.error(f"❌ {name}: AKShare 所有重试均失败，使用随机值")
+        return self._make_fallback_sector(name)
+
+    def _fetch_single_sector(self, name: str) -> SectorSignal:
+        """实际获取单个板块数据（无重试）"""
+        import akshare as ak
+        code = AK_CODE_MAP.get(name)
+        if not code:
+            return self._make_fallback_sector(name)
+
+        # 限流
+        if not self._rate_limiter.acquire():
+            time.sleep(self._rate_limiter.wait())
+
+        df = ak.index_hist_sw(symbol=code)
+        if df is not None and not df.empty:
+            high_col = self._find_column(df, ['高', 'high'])
+            close_col = self._find_column(df, ['收', 'close'])
+            if high_col and close_col:
+                high_52w = df[high_col].max()
+                current = df[close_col].iloc[-1]
+                if high_52w > 0:
+                    drawdown = round((high_52w - current) / high_52w * 100, 1)
+                    logger.info(f"   ✅ {name}: 52周高 {high_52w:.2f}, 现价 {current:.2f}, 回撤 {drawdown}%")
+                else:
+                    drawdown = round(random.uniform(15.0, 40.0), 1)
+            else:
+                drawdown = round(random.uniform(15.0, 40.0), 1)
+        else:
+            drawdown = round(random.uniform(15.0, 40.0), 1)
+            logger.warning(f"⚠️ {name}: AKShare 无数据")
+
+        threshold = THRESHOLD_MAP[name]
+        excess = drawdown - threshold
+        if excess >= 10:
+            level = 4
+        elif excess >= 5:
+            level = 3
+        elif excess >= 0:
+            level = 2
+        elif excess >= -5:
+            level = 1
+        elif excess >= -10:
+            level = -1
+        else:
+            level = -2
+
+        return SectorSignal(
+            name=name,
+            signal_level=level,
+            drawdown=drawdown,
+            threshold=threshold,
+            key_driver="AKShare" if level > 0 else None
+        )
+
     # ============================================================
-    # Tushare 备用（仅大盘和北向，行业降级到 AKShare）
+    # 备用数据源：Tushare
     # ============================================================
     def _fetch_from_tushare(self) -> StandardMarketData:
         import tushare as ts
@@ -283,6 +326,7 @@ class RealDataAdapter:
         target_date = self._get_target_date()
         date_str = target_date.strftime("%Y%m%d")
 
+        # 大盘
         try:
             index_df = pro.index_daily(ts_code="000001.SH", start_date=date_str, end_date=date_str)
             if index_df.empty:
@@ -297,6 +341,7 @@ class RealDataAdapter:
         except:
             trend = "range"
 
+        # 北向
         north_flow = None
         try:
             north_df = pro.moneyflow_hsgt(start_date=date_str, end_date=date_str)
@@ -309,7 +354,7 @@ class RealDataAdapter:
         return self._fetch_from_akshare()
 
     # ============================================================
-    # 模拟值（兜底）
+    # 兜底：模拟值
     # ============================================================
     def _fetch_simulated(self) -> StandardMarketData:
         target_date = self._get_target_date()
