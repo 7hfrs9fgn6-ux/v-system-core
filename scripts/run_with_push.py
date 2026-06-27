@@ -3,7 +3,6 @@
 """
 V系统完整闭环执行脚本
 支持五阶段：pre / intraday_a / intraday_b / post / night
-集成：宏观数据增量历史、市场数据缓存、记忆体自动提交
 """
 
 import sys
@@ -95,35 +94,34 @@ def main():
     if hasattr(market_data, '_index_data'):
         result._index_data = market_data._index_data
 
-    # ---------- 2.5 宏观数据采集（增量历史版） ----------
+    # ---------- 2.5 宏观数据采集 ----------
     print("\n🌐 步骤2.5：宏观数据采集...")
+    # ✅ post 阶段强制刷新，其他阶段使用缓存
+    force_refresh = (args.phase == "post")
     try:
         from core.macro_collector import MacroCollector
         macro = MacroCollector()
-        # 尝试刷新今日数据（如果尚未记录）
-        refreshed = macro.refresh_today()
-        if refreshed:
-            print("   📝 已记录今日宏观数据（增量追加）")
-        else:
-            print("   📚 使用已有宏观记录（今日已存在）")
-        # 获取最新数据用于推送展示
-        macro_data = macro.get_latest_data()
+        macro_data = macro.format_for_push(force_refresh=force_refresh)
         result._macro_data = macro_data
-        us_count = len(macro_data.get('us_market', {}).get('indices', {}))
-        asia_count = len(macro_data.get('asia_market', {}).get('indices', {}))
-        print(f"   ✅ 宏观数据: 美股{us_count}个指数, 亚太{asia_count}个指数")
+        us_count = len(macro_data.get('us_market', {}).get('indices', []))
+        asia_count = len(macro_data.get('asia_market', {}).get('indices', []))
+        if force_refresh:
+            print(f"   ✅ 宏观数据已刷新: 美股{us_count}个指数, 亚太{asia_count}个指数")
+        else:
+            print(f"   ✅ 宏观数据已缓存读取: 美股{us_count}个指数, 亚太{asia_count}个指数")
     except Exception as e:
         print(f"   ⚠️ 宏观数据获取失败: {e}")
         result._macro_data = {}
 
-    # ---------- 2.6 市场数据采集（永久缓存） ----------
+    # ---------- 2.6 市场数据采集 ----------
     print("\n📈 步骤2.6：市场数据采集...")
     try:
         market = MarketDataCollector(storage_dir="memory_data/")
-        # 不强制刷新，使用缓存
-        indices_data = market.get_indices()
-        stats_data = market.get_market_stats()
-        flow_data = market.get_sector_flow()
+        # post 阶段强制刷新，其他阶段使用缓存
+        force_refresh_market = (args.phase == "post")
+        indices_data = market.get_indices(force_refresh=force_refresh_market)
+        stats_data = market.get_market_stats(force_refresh=force_refresh_market)
+        flow_data = market.get_sector_flow(force_refresh=force_refresh_market)
         result._indices = indices_data
         result._market_stats = stats_data
         result._sector_flow = flow_data
