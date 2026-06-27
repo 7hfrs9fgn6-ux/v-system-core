@@ -71,3 +71,10 @@ jobs:
           echo "时间: $(date '+%Y-%m-%d %H:%M:%S') (北京时间)" >> $GITHUB_STEP_SUMMARY
           echo "阶段: ${{ steps.get_phase.outputs.phase }}" >> $GITHUB_STEP_SUMMARY
           echo "状态: ✅ 推送完成" >> $GITHUB_STEP_SUMMARY
+
+      - name: ⑧ 上传宏观缓存（可选）
+        uses: actions/upload-artifact@v4  
+        with:
+             name: macro-cache
+             path: memory_data/
+            retention-days: 7
