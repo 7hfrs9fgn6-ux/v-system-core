@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-市场数据采集模块（增量历史记录版）
+市场数据采集模块（永久缓存版 - 无强制刷新）
 提供：多指数行情、涨跌家数、板块资金流向（用于推送展示）
-同时将每日市场数据增量追加到历史 CSV，永不覆盖
+数据永久存储到 memory_data/，每天只获取一次（自动判断）
 """
 
 import os
@@ -11,13 +11,13 @@ import json
 import pandas as pd
 import logging
 from datetime import datetime
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class MarketDataCollector:
-    """市场数据采集器（增量历史记录版）"""
+    """市场数据采集器（永久缓存版）"""
 
     def __init__(self, storage_dir: str = "memory_data/"):
         self.storage_dir = storage_dir
@@ -62,12 +62,6 @@ class MarketDataCollector:
         df.to_csv(file_path, index=False)
         logger.debug(f"✅ 保存 {filename}: {len(df)} 条记录")
 
-    def _is_today_recorded(self, df: pd.DataFrame, date_col: str = "date") -> bool:
-        """检查今天的数据是否已经存在"""
-        if df.empty or date_col not in df.columns:
-            return False
-        return self.today in df[date_col].values
-
     # ---------- 辅助方法 ----------
     def _safe_float(self, value) -> Optional[float]:
         if value is None:
@@ -84,28 +78,39 @@ class MarketDataCollector:
                     return c
         return None
 
+    def _is_data_today(self, data: Dict) -> bool:
+        """检查数据是否包含今日记录"""
+        if not data:
+            return False
+        # 检查 timestamp 字段
+        if 'timestamp' in data and self.today in data['timestamp']:
+            return True
+        # 检查 indices 中的 date 字段
+        if 'indices' in data:
+            for idx in data['indices'].values():
+                if isinstance(idx, dict) and idx.get('date') == self.today:
+                    return True
+        # 检查是否有单独的 date 字段
+        if 'date' in data and data['date'] == self.today:
+            return True
+        return False
+
     # ============================================================
-    # 1. 获取指数数据（用于推送展示 + 历史记录）
+    # 1. 多指数行情（永久缓存）
     # ============================================================
-    def get_indices(self, force_refresh: bool = False) -> Dict:
+    def get_indices(self) -> Dict:
         """
-        获取主要指数行情（返回今日数据用于推送）
-        force_refresh: 强制刷新（忽略缓存）
+        获取主要指数行情
+        永久缓存：今天只获取一次，之后直接读缓存
         """
         cache_file = "market_indices.json"
+        cached = self._load_json(cache_file)
+        if cached and self._is_data_today(cached):
+            logger.info(f"✅ 从缓存读取指数数据: {cache_file}")
+            return cached
 
-        # 如果不强制刷新且缓存存在且包含今日数据，直接返回
-        if not force_refresh:
-            cached = self._load_json(cache_file)
-            if cached and self._is_data_today(cached):
-                logger.info(f"✅ 从缓存读取指数数据: {cache_file}")
-                return cached
-
-        # 刷新数据
         logger.info("📊 刷新指数数据...")
         result = self._fetch_indices_impl()
-
-        # 保存到永久缓存（最新状态）
         self._save_json(cache_file, result)
         return result
 
@@ -150,7 +155,7 @@ class MarketDataCollector:
                         "pct_change": self._safe_float(row.get('涨跌幅')),
                         "volume": self._safe_float(row.get('成交量')),
                         "amount": self._safe_float(row.get('成交额')),
-                        "date": datetime.now().strftime("%Y-%m-%d")
+                        "date": self.today
                     }
 
             logger.info(f"✅ 获取到 {len(result['indices'])} 个指数数据")
@@ -161,17 +166,15 @@ class MarketDataCollector:
             return result
 
     # ============================================================
-    # 2. 涨跌家数统计（用于推送展示 + 历史记录）
+    # 2. 涨跌家数统计（永久缓存）
     # ============================================================
-    def get_market_stats(self, force_refresh: bool = False) -> Dict:
+    def get_market_stats(self) -> Dict:
         """获取市场涨跌家数统计"""
         cache_file = "market_stats.json"
-
-        if not force_refresh:
-            cached = self._load_json(cache_file)
-            if cached and self._is_data_today(cached):
-                logger.info(f"✅ 从缓存读取涨跌家数: {cache_file}")
-                return cached
+        cached = self._load_json(cache_file)
+        if cached and self._is_data_today(cached):
+            logger.info(f"✅ 从缓存读取涨跌家数: {cache_file}")
+            return cached
 
         logger.info("📊 刷新涨跌家数...")
         result = self._fetch_stats_impl()
@@ -185,7 +188,8 @@ class MarketDataCollector:
             "down": 0,
             "flat": 0,
             "total": 0,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "date": self.today
         }
 
         try:
@@ -208,17 +212,15 @@ class MarketDataCollector:
         return result
 
     # ============================================================
-    # 3. 板块资金流向TOP5（用于推送展示）
+    # 3. 板块资金流向TOP5（永久缓存）
     # ============================================================
-    def get_sector_flow(self, force_refresh: bool = False) -> Dict:
+    def get_sector_flow(self) -> Dict:
         """获取板块资金流向TOP5"""
         cache_file = "sector_flow.json"
-
-        if not force_refresh:
-            cached = self._load_json(cache_file)
-            if cached and self._is_data_today(cached):
-                logger.info(f"✅ 从缓存读取板块资金流向: {cache_file}")
-                return cached
+        cached = self._load_json(cache_file)
+        if cached and self._is_data_today(cached):
+            logger.info(f"✅ 从缓存读取板块资金流向: {cache_file}")
+            return cached
 
         logger.info("📊 刷新板块资金流向...")
         result = self._fetch_flow_impl()
@@ -230,7 +232,8 @@ class MarketDataCollector:
         result = {
             "net_inflow_top5": [],
             "net_outflow_top5": [],
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "date": self.today
         }
 
         try:
@@ -257,25 +260,7 @@ class MarketDataCollector:
         return result
 
     # ============================================================
-    # 4. 日期检查
-    # ============================================================
-    def _is_data_today(self, data: Dict) -> bool:
-        """检查数据是否包含今日记录"""
-        if not data:
-            return False
-        today = datetime.now().strftime("%Y-%m-%d")
-        if 'timestamp' in data and today in data['timestamp']:
-            return True
-        if 'indices' in data:
-            for idx in data['indices'].values():
-                if isinstance(idx, dict) and idx.get('date') == today:
-                    return True
-        if 'up' in data and 'timestamp' in data and today in data['timestamp']:
-            return True
-        return False
-
-    # ============================================================
-    # 5. 增量历史记录（新增核心功能）
+    # 4. 增量历史记录（新增核心功能）
     # ============================================================
     def record_today_history(self, indices_data: Dict, stats_data: Dict) -> bool:
         """
@@ -285,10 +270,11 @@ class MarketDataCollector:
         filename = "market_history.csv"
         df = self._load_csv(filename)
 
-        # 如果今天已记录，跳过
-        if self._is_today_recorded(df):
-            logger.info("⏭️ 今日市场历史已存在，跳过记录")
-            return False
+        # 检查今天是否已记录
+        if not df.empty and 'date' in df.columns:
+            if self.today in df['date'].values:
+                logger.info("⏭️ 今日市场历史已存在，跳过记录")
+                return False
 
         # 构建今日记录
         record = {
