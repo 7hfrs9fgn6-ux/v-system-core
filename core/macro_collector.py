@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-宏观数据采集模块（超时版）
-为每个数据源设置独立超时（美股15秒，其他10秒），避免卡死
+宏观数据采集模块（超时控制版）
+为每个数据获取任务设置 10 秒超时，防止卡死
 """
 
 import os
@@ -21,19 +21,12 @@ logger = logging.getLogger(__name__)
 class MacroCollector:
     def __init__(self):
         self._cache = MacroCache()
-        self._retry_count = 2  # 减少重试次数
-        self._retry_delay = [1, 2]
-        # 每个数据源的超时时间（秒）
-        self._timeout_map = {
-            'us_market': 15,
-            'asia_market': 10,
-            'europe_market': 10,
-            'commodities': 10,
-            'forex': 8,
-            'a50_futures': 8,
-        }
+        self._cache_ttl = 3600
+        self._retry_count = 2               # 重试次数减少（因为有超时）
+        self._retry_delay = [1, 2]          # 重试间隔
+        self._timeout = 10                  # 每个任务超时秒数
 
-    # ---------- 辅助 ----------
+    # ---------- 通用辅助 ----------
     def _safe_float(self, value) -> Optional[float]:
         if value is None:
             return None
@@ -61,9 +54,48 @@ class MacroCollector:
             "usd_cny": {},
             "price": None,
             "pct_change": None,
-            "data_source": "cache_fallback",
+            "data_source": "empty",
             "timestamp": datetime.now().isoformat()
         }
+
+    # ---------- 核心安全获取（带超时） ----------
+    def _safe_fetch(self, func, cache_key: str = None, *args, **kwargs) -> Any:
+        # 1. 尝试从存储缓存读取（优先）
+        if cache_key:
+            cached_data = self._get_cached_from_storage(cache_key)
+            if cached_data is not None and not self._is_empty_result(cached_data):
+                logger.info(f"✅ 从存储缓存获取 {cache_key}")
+                return cached_data
+
+        # 2. 实时获取（带超时）
+        for attempt in range(self._retry_count):
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(func, *args, **kwargs)
+                    result = future.result(timeout=self._timeout)   # 10秒超时
+                if result and not self._is_empty_result(result):
+                    if cache_key:
+                        self._save_cached_to_storage(cache_key, result)
+                    return result
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"⏰ {cache_key} 获取超时 ({self._timeout}s)，尝试重试 ({attempt+1}/{self._retry_count})")
+                continue
+            except Exception as e:
+                logger.warning(f"⚠️ {cache_key} 获取异常: {e}，尝试重试 ({attempt+1}/{self._retry_count})")
+                if attempt < self._retry_count - 1:
+                    time.sleep(self._retry_delay[attempt])
+                continue
+
+        # 3. 获取失败，使用过期缓存（即使过期）
+        if cache_key:
+            stale_data = self._get_cached_from_storage(cache_key, ignore_ttl=True)
+            if stale_data is not None and not self._is_empty_result(stale_data):
+                logger.warning(f"⚠️ 使用过期缓存 {cache_key}")
+                return stale_data
+
+        # 4. 最终降级：空数据
+        logger.warning(f"⚠️ {cache_key} 完全不可用")
+        return self._get_empty_result()
 
     def _is_empty_result(self, data) -> bool:
         if data is None:
@@ -104,61 +136,347 @@ class MacroCollector:
             methods[key](data)
             logger.info(f"✅ {key} 已保存到存储缓存")
 
-    # ---------- 安全获取（带超时） ----------
-    def _safe_fetch(self, func, cache_key: str = None, *args, **kwargs) -> Any:
-        # 1. 缓存优先
-        if cache_key:
-            cached_data = self._get_cached_from_storage(cache_key)
-            if cached_data is not None and not self._is_empty_result(cached_data):
-                logger.info(f"✅ 从存储缓存获取 {cache_key}")
-                return cached_data
-
-        timeout = self._timeout_map.get(cache_key, 10)
-
-        # 2. 实时获取（带超时）
-        for attempt in range(self._retry_count):
-            try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(func, *args, **kwargs)
-                    result = future.result(timeout=timeout)
-                    if result and not self._is_empty_result(result):
-                        if cache_key:
-                            self._save_cached_to_storage(cache_key, result)
-                        return result
-            except concurrent.futures.TimeoutError:
-                logger.warning(f"⏰ {cache_key} 超时 ({timeout}s)，尝试 {attempt+1}/{self._retry_count}")
-                if attempt < self._retry_count - 1:
-                    time.sleep(self._retry_delay[attempt])
-                    continue
-            except Exception as e:
-                logger.warning(f"⚠️ {cache_key} 异常: {e}")
-                if attempt < self._retry_count - 1:
-                    time.sleep(self._retry_delay[attempt])
-                    continue
-
-        # 3. 使用过期缓存
-        if cache_key:
-            stale_data = self._get_cached_from_storage(cache_key, ignore_ttl=True)
-            if stale_data is not None and not self._is_empty_result(stale_data):
-                logger.warning(f"⚠️ 使用过期缓存 {cache_key}")
-                return stale_data
-
-        logger.warning(f"⚠️ {cache_key} 完全不可用，返回空数据")
-        return self._get_empty_result()
-
     # ============================================================
-    # 以下各个获取方法保持不变，只需调用 _safe_fetch
+    # 1. 美股市场
     # ============================================================
     def get_us_market(self) -> Dict:
         return self._safe_fetch(self._fetch_us_market_impl, 'us_market')
 
     def _fetch_us_market_impl(self) -> Dict:
-        # ... 你已有的实现，无需改动 ...
-        # 但为了完整，我会在最终完整代码中包含它
+        result = {"indices": {}, "semiconductor": {}, "tech_giants": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
+        try:
+            import akshare as ak
+            df = ak.stock_us_spot()
+            if df is None or df.empty:
+                logger.warning("美股数据为空")
+                return result
 
-    # 其他方法（_fetch_asia_market_impl等）同样不变
+            name_col = self._find_column(df, ['名称', 'name', 'Name'])
+            price_col = self._find_column(df, ['最新价', 'price', 'close'])
+            pct_col = self._find_column(df, ['涨跌幅', 'change', 'pct_change'])
+            if not name_col or not price_col:
+                logger.warning("美股列名不匹配")
+                return result
+
+            index_keywords = ["道琼斯", "纳斯达克", "标普500"]
+            for keyword in index_keywords:
+                matched = df[df[name_col].str.contains(keyword, na=False)]
+                if not matched.empty:
+                    row = matched.iloc[0]
+                    result["indices"][keyword] = {"name": keyword, "price": self._safe_float(row.get(price_col)), "pct_change": self._safe_float(row.get(pct_col))}
+
+            sem_matched = df[df[name_col].str.contains("费城半导体", na=False)]
+            if not sem_matched.empty:
+                row = sem_matched.iloc[0]
+                result["semiconductor"] = {"name": "费城半导体", "price": self._safe_float(row.get(price_col)), "pct_change": self._safe_float(row.get(pct_col))}
+
+            tech_giants = ["苹果", "英伟达", "微软", "谷歌", "亚马逊", "Meta", "特斯拉", "美光", "英特尔", "AMD"]
+            for giant in tech_giants:
+                matched = df[df[name_col].str.contains(giant, na=False)]
+                if not matched.empty:
+                    row = matched.iloc[0]
+                    result["tech_giants"][giant] = {"name": giant, "price": self._safe_float(row.get(price_col)), "pct_change": self._safe_float(row.get(pct_col))}
+            return result
+        except Exception as e:
+            logger.warning(f"美股获取异常: {e}")
+            return result
 
     # ============================================================
-    # 格式化方法不变
+    # 2. 亚太市场
     # ============================================================
-    # ... 其余全部保持原样 ...
+    def get_asia_market(self) -> Dict:
+        return self._safe_fetch(self._fetch_asia_market_impl, 'asia_market')
+
+    def _fetch_asia_market_impl(self) -> Dict:
+        result = {"indices": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
+        try:
+            import akshare as ak
+            df = None
+            for func_name in ['stock_zh_index_spot', 'index_zh_spot']:
+                try:
+                    if hasattr(ak, func_name):
+                        df = getattr(ak, func_name)()
+                        if df is not None and not df.empty:
+                            break
+                except:
+                    continue
+            if df is None or df.empty:
+                try:
+                    df = ak.index_zh_spot()
+                except:
+                    pass
+            if df is None or df.empty:
+                logger.warning("亚太数据为空")
+                return result
+
+            name_col = self._find_column(df, ['名称', 'name', 'Name'])
+            price_col = self._find_column(df, ['最新价', 'price', 'close'])
+            pct_col = self._find_column(df, ['涨跌幅', 'change', 'pct_change'])
+            if not name_col or not price_col:
+                logger.warning("亚太列名不匹配")
+                return result
+
+            asia_map = {"日经225": "N225", "韩国KOSPI": "KOSPI", "恒生指数": "HSI", "台湾加权": "TWII"}
+            for name, code in asia_map.items():
+                matched = df[df[name_col].str.contains(name, na=False)]
+                if not matched.empty:
+                    row = matched.iloc[0]
+                    result["indices"][code] = {"name": name, "price": self._safe_float(row.get(price_col)), "pct_change": self._safe_float(row.get(pct_col))}
+            return result
+        except Exception as e:
+            logger.warning(f"亚太获取异常: {e}")
+            return result
+
+    # ============================================================
+    # 3. 欧洲市场
+    # ============================================================
+    def get_europe_market(self) -> Dict:
+        return self._safe_fetch(self._fetch_europe_market_impl, 'europe_market')
+
+    def _fetch_europe_market_impl(self) -> Dict:
+        result = {"indices": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
+        try:
+            import akshare as ak
+            df = None
+            for func_name in ['stock_zh_index_spot', 'index_zh_spot']:
+                try:
+                    if hasattr(ak, func_name):
+                        df = getattr(ak, func_name)()
+                        if df is not None and not df.empty:
+                            break
+                except:
+                    continue
+            if df is None or df.empty:
+                try:
+                    df = ak.index_zh_spot()
+                except:
+                    pass
+            if df is None or df.empty:
+                logger.warning("欧洲数据为空")
+                return result
+
+            name_col = self._find_column(df, ['名称', 'name', 'Name'])
+            price_col = self._find_column(df, ['最新价', 'price', 'close'])
+            pct_col = self._find_column(df, ['涨跌幅', 'change', 'pct_change'])
+            if not name_col or not price_col:
+                logger.warning("欧洲列名不匹配")
+                return result
+
+            europe_map = {"德国DAX": "GDAXI", "英国富时": "FTSE", "法国CAC": "FCHI"}
+            for name, code in europe_map.items():
+                matched = df[df[name_col].str.contains(name, na=False)]
+                if not matched.empty:
+                    row = matched.iloc[0]
+                    result["indices"][code] = {"name": name, "price": self._safe_float(row.get(price_col)), "pct_change": self._safe_float(row.get(pct_col))}
+            return result
+        except Exception as e:
+            logger.warning(f"欧洲获取异常: {e}")
+            return result
+
+    # ============================================================
+    # 4. 大宗商品
+    # ============================================================
+    def get_commodities(self) -> Dict:
+        return self._safe_fetch(self._fetch_commodities_impl, 'commodities')
+
+    def _fetch_commodities_impl(self) -> Dict:
+        result = {"oil": {}, "gold": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
+        try:
+            import akshare as ak
+            for symbol, name in [("CL", "WTI"), ("B", "布伦特")]:
+                try:
+                    df = ak.futures_foreign_main_sina(symbol=symbol)
+                    if df is not None and not df.empty:
+                        latest = df.iloc[-1]
+                        price_col = self._find_column(df, ['最新价', 'price'])
+                        pct_col = self._find_column(df, ['涨跌幅', 'change'])
+                        if price_col:
+                            result["oil"][name] = {"name": name, "price": self._safe_float(latest.get(price_col)), "pct_change": self._safe_float(latest.get(pct_col)) if pct_col else None}
+                except:
+                    pass
+            try:
+                gold_df = ak.futures_foreign_main_sina(symbol="GC")
+                if gold_df is not None and not gold_df.empty:
+                    latest = gold_df.iloc[-1]
+                    price_col = self._find_column(gold_df, ['最新价', 'price'])
+                    pct_col = self._find_column(gold_df, ['涨跌幅', 'change'])
+                    if price_col:
+                        result["gold"] = {"price": self._safe_float(latest.get(price_col)), "pct_change": self._safe_float(latest.get(pct_col)) if pct_col else None}
+            except:
+                pass
+            return result
+        except Exception as e:
+            logger.warning(f"大宗商品获取异常: {e}")
+            return result
+
+    # ============================================================
+    # 5. 汇率
+    # ============================================================
+    def get_forex(self) -> Dict:
+        return self._safe_fetch(self._fetch_forex_impl, 'forex')
+
+    def _fetch_forex_impl(self) -> Dict:
+        result = {"usd_cny": {}, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
+        try:
+            import akshare as ak
+            try:
+                df = ak.currency_rates()
+                if df is not None and not df.empty:
+                    name_col = self._find_column(df, ['货币名称', 'name'])
+                    price_col = self._find_column(df, ['最新价', 'price'])
+                    pct_col = self._find_column(df, ['涨跌幅', 'change'])
+                    if name_col and price_col:
+                        matched = df[df[name_col].str.contains('美元', na=False)]
+                        if not matched.empty:
+                            row = matched.iloc[0]
+                            result["usd_cny"]["onshore"] = self._safe_float(row.get(price_col))
+                            if pct_col:
+                                result["usd_cny"]["pct_change"] = self._safe_float(row.get(pct_col))
+            except:
+                pass
+            try:
+                df = ak.currency_rates_central()
+                if df is not None and not df.empty:
+                    name_col = self._find_column(df, ['货币名称', 'name'])
+                    price_col = self._find_column(df, ['最新价', 'price'])
+                    if name_col and price_col:
+                        matched = df[df[name_col].str.contains('美元', na=False)]
+                        if not matched.empty:
+                            row = matched.iloc[0]
+                            result["usd_cny"]["central"] = self._safe_float(row.get(price_col))
+            except:
+                pass
+            return result
+        except Exception as e:
+            logger.warning(f"汇率获取异常: {e}")
+            return result
+
+    # ============================================================
+    # 6. A50期货
+    # ============================================================
+    def get_a50_futures(self) -> Dict:
+        return self._safe_fetch(self._fetch_a50_impl, 'a50_futures')
+
+    def _fetch_a50_impl(self) -> Dict:
+        result = {"price": None, "pct_change": None, "data_source": "AKShare", "timestamp": datetime.now().isoformat()}
+        try:
+            import akshare as ak
+            for symbol in ["A50", "SGXCN"]:
+                try:
+                    df = ak.futures_foreign_main_sina(symbol=symbol)
+                    if df is not None and not df.empty:
+                        latest = df.iloc[-1]
+                        price_col = self._find_column(df, ['最新价', 'price'])
+                        pct_col = self._find_column(df, ['涨跌幅', 'change'])
+                        if price_col:
+                            result["price"] = self._safe_float(latest.get(price_col))
+                            if pct_col:
+                                result["pct_change"] = self._safe_float(latest.get(pct_col))
+                            if result["price"] is not None:
+                                break
+                except:
+                    continue
+            return result
+        except Exception as e:
+            logger.warning(f"A50期货获取异常: {e}")
+            return result
+
+    # ============================================================
+    # 7. 宏观快照与格式化
+    # ============================================================
+    def get_macro_snapshot(self) -> Dict:
+        cache_file = os.path.join(self._cache.storage_dir, "macro_snapshot.json")
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'r') as f:
+                    data = json.load(f)
+                if data.get('_cache_time'):
+                    cache_time = datetime.fromisoformat(data['_cache_time'])
+                    if (datetime.now() - cache_time).total_seconds() < 7200:
+                        logger.info("✅ 从存储缓存获取宏观快照")
+                        return data.get('data', {})
+            except:
+                pass
+        result = {
+            "us_market": self.get_us_market(),
+            "asia_market": self.get_asia_market(),
+            "europe_market": self.get_europe_market(),
+            "commodities": self.get_commodities(),
+            "forex": self.get_forex(),
+            "a50_futures": self.get_a50_futures(),
+            "timestamp": datetime.now().isoformat()
+        }
+        try:
+            with open(cache_file, 'w') as f:
+                json.dump({'_cache_time': datetime.now().isoformat(), 'data': result}, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+        return result
+
+    def format_for_push(self) -> Dict:
+        snapshot = self.get_macro_snapshot()
+        return {
+            "us_market": self._format_us_market(snapshot.get("us_market", {})),
+            "asia_market": self._format_asia_market(snapshot.get("asia_market", {})),
+            "europe_market": self._format_europe_market(snapshot.get("europe_market", {})),
+            "commodities": self._format_commodities(snapshot.get("commodities", {})),
+            "forex": self._format_forex(snapshot.get("forex", {})),
+            "a50_futures": self._format_a50(snapshot.get("a50_futures", {})),
+            "timestamp": snapshot.get("timestamp", "")
+        }
+
+    def _format_us_market(self, data: Dict) -> Dict:
+        result = {"indices": [], "tech_giants": [], "semiconductor": None}
+        for name, idx in data.get("indices", {}).items():
+            if idx.get("price"):
+                result["indices"].append({"name": name, "price": idx.get("price"), "pct_change": idx.get("pct_change")})
+        sem = data.get("semiconductor", {})
+        if sem.get("price"):
+            result["semiconductor"] = {"name": "费城半导体", "price": sem.get("price"), "pct_change": sem.get("pct_change")}
+        for name, giant in data.get("tech_giants", {}).items():
+            if giant.get("price"):
+                result["tech_giants"].append({"name": name, "price": giant.get("price"), "pct_change": giant.get("pct_change")})
+        return result
+
+    def _format_asia_market(self, data: Dict) -> Dict:
+        result = {"indices": []}
+        for code, idx in data.get("indices", {}).items():
+            if idx.get("price"):
+                result["indices"].append({"name": idx.get("name", code), "price": idx.get("price"), "pct_change": idx.get("pct_change")})
+        return result
+
+    def _format_europe_market(self, data: Dict) -> Dict:
+        result = {"indices": []}
+        for code, idx in data.get("indices", {}).items():
+            if idx.get("price"):
+                result["indices"].append({"name": idx.get("name", code), "price": idx.get("price"), "pct_change": idx.get("pct_change")})
+        return result
+
+    def _format_commodities(self, data: Dict) -> Dict:
+        result = {"oil": [], "gold": None}
+        for name, oil in data.get("oil", {}).items():
+            if oil.get("price"):
+                result["oil"].append({"name": oil.get("name", name), "price": oil.get("price"), "pct_change": oil.get("pct_change")})
+        gold = data.get("gold", {})
+        if gold.get("price"):
+            result["gold"] = {"price": gold.get("price"), "pct_change": gold.get("pct_change")}
+        return result
+
+    def _format_forex(self, data: Dict) -> Dict:
+        result = {"usd_cny": {}}
+        usd = data.get("usd_cny", {})
+        if usd.get("onshore"):
+            result["usd_cny"]["onshore"] = usd.get("onshore")
+        if usd.get("central"):
+            result["usd_cny"]["central"] = usd.get("central")
+        if usd.get("pct_change"):
+            result["usd_cny"]["pct_change"] = usd.get("pct_change")
+        return result
+
+    def _format_a50(self, data: Dict) -> Dict:
+        result = {}
+        if data.get("price"):
+            result["price"] = data.get("price")
+        if data.get("pct_change"):
+            result["pct_change"] = data.get("pct_change")
+        return result
