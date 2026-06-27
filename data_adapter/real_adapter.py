@@ -22,9 +22,21 @@ THRESHOLD_MAP = {
 }
 
 AK_CODE_MAP = {
-    "电子": "801080", "计算机": "801750", "通信": "801770", "传媒": "801760", "医药生物": "801150",
-    "食品饮料": "801120", "家用电器": "801110", "电力设备": "801730", "汽车": "801880", "国防军工": "801740",
-    "银行": "801780", "非银金融": "801790", "公用事业": "801160", "煤炭": "801950", "石油石化": "801960",
+    "电子": "801080",
+    "计算机": "801750",
+    "通信": "801770",
+    "传媒": "801760",
+    "医药生物": "801150",
+    "食品饮料": "801120",
+    "家用电器": "801110",
+    "电力设备": "801730",
+    "汽车": "801880",
+    "国防军工": "801740",
+    "银行": "801780",
+    "非银金融": "801790",
+    "公用事业": "801160",
+    "煤炭": "801950",
+    "石油石化": "801960",
 }
 
 
@@ -33,6 +45,7 @@ class RateLimiter:
         self.max_calls = max_calls
         self.period = period
         self.calls = []
+
     def acquire(self) -> bool:
         now = time.time()
         self.calls = [t for t in self.calls if now - t < self.period]
@@ -40,6 +53,7 @@ class RateLimiter:
             self.calls.append(now)
             return True
         return False
+
     def wait(self) -> float:
         now = time.time()
         if not self.calls:
@@ -55,7 +69,7 @@ class RealDataAdapter:
         self.tushare_token = os.environ.get("TUSHARE_TOKEN")
         self.use_tushare = bool(self.tushare_token and self.tushare_token != "dummy")
         self.data_source = "AKShare"
-        self._rate_limiter = RateLimiter(max_calls=60, period=60)
+        self._rate_limiter = RateLimiter(max_calls=60, period=60)  # 降低到60次/分钟
         self._index_close = 0
         self._index_pct = 0
 
@@ -78,7 +92,13 @@ class RealDataAdapter:
             return self._fetch_simulated()
 
     def _get_target_date(self):
-        phase_days_back = {"pre": 1, "intraday_a": 0, "intraday_b": 0, "post": 0, "night": 0}
+        phase_days_back = {
+            "pre": 1,
+            "intraday_a": 0,
+            "intraday_b": 0,
+            "post": 0,
+            "night": 0,
+        }
         days_back = phase_days_back.get(self.phase, 0)
         target = datetime.now() - timedelta(days=days_back)
         while target.weekday() >= 5:
@@ -89,23 +109,38 @@ class RealDataAdapter:
         threshold = THRESHOLD_MAP[name]
         drawdown = round(random.uniform(15.0, 40.0), 1)
         excess = drawdown - threshold
-        if excess >= 10: level = 4
-        elif excess >= 5: level = 3
-        elif excess >= 0: level = 2
-        elif excess >= -5: level = 1
-        elif excess >= -10: level = -1
-        else: level = -2
-        return SectorSignal(name=name, signal_level=level, drawdown=drawdown, threshold=threshold, key_driver="兜底值" if level > 0 else None)
+        if excess >= 10:
+            level = 4
+        elif excess >= 5:
+            level = 3
+        elif excess >= 0:
+            level = 2
+        elif excess >= -5:
+            level = 1
+        elif excess >= -10:
+            level = -1
+        else:
+            level = -2
+        return SectorSignal(
+            name=name,
+            signal_level=level,
+            drawdown=drawdown,
+            threshold=threshold,
+            key_driver="兜底值" if level > 0 else None
+        )
 
     def _find_column(self, df, candidates):
         if df is None or df.empty:
             return None
         for c in df.columns:
-            for cand in candidates:
-                if cand in c or c in cand:
+            for candidate in candidates:
+                if candidate in c or c in candidate:
                     return c
         return None
 
+    # ============================================================
+    # 主数据源：AKShare（简化稳定版）
+    # ============================================================
     def _fetch_from_akshare(self) -> StandardMarketData:
         import akshare as ak
         target_date = self._get_target_date()
@@ -152,15 +187,19 @@ class RealDataAdapter:
         except:
             pass
 
-        # 各板块
+        # 各板块（简化：并发数2，超时15秒，不重试）
         sectors = []
         logger.info("📊 AKShare 获取各板块52周回撤...")
+
         with ThreadPoolExecutor(max_workers=2) as executor:
-            future_to_name = {executor.submit(self._fetch_single_sector, name): name for name in SECTOR_NAMES}
+            future_to_name = {
+                executor.submit(self._fetch_single_sector, name): name
+                for name in SECTOR_NAMES
+            }
             for future in future_to_name:
                 name = future_to_name[future]
                 try:
-                    result = future.result(timeout=15)
+                    result = future.result(timeout=15)  # 15秒超时
                     sectors.append(result)
                 except FuturesTimeoutError:
                     logger.warning(f"⚠️ {name} 获取超时（15s），使用随机值")
@@ -180,12 +219,16 @@ class RealDataAdapter:
         )
 
     def _fetch_single_sector(self, name: str) -> SectorSignal:
+        """获取单个板块数据（无重试，一次失败即返回兜底值）"""
         import akshare as ak
         code = AK_CODE_MAP.get(name)
         if not code:
             return self._make_fallback_sector(name)
+
+        # 限流
         if not self._rate_limiter.acquire():
             time.sleep(self._rate_limiter.wait())
+
         try:
             df = ak.index_hist_sw(symbol=code)
             if df is not None and not df.empty:
@@ -205,25 +248,44 @@ class RealDataAdapter:
                 drawdown = round(random.uniform(15.0, 40.0), 1)
                 logger.warning(f"⚠️ {name}: AKShare 无数据")
         except Exception as e:
+            # 任何异常直接返回兜底值
             logger.warning(f"⚠️ {name}: AKShare 异常 ({e})，使用随机值")
             drawdown = round(random.uniform(15.0, 40.0), 1)
 
         threshold = THRESHOLD_MAP[name]
         excess = drawdown - threshold
-        if excess >= 10: level = 4
-        elif excess >= 5: level = 3
-        elif excess >= 0: level = 2
-        elif excess >= -5: level = 1
-        elif excess >= -10: level = -1
-        else: level = -2
-        return SectorSignal(name=name, signal_level=level, drawdown=drawdown, threshold=threshold, key_driver="AKShare" if level > 0 else None)
+        if excess >= 10:
+            level = 4
+        elif excess >= 5:
+            level = 3
+        elif excess >= 0:
+            level = 2
+        elif excess >= -5:
+            level = 1
+        elif excess >= -10:
+            level = -1
+        else:
+            level = -2
 
+        return SectorSignal(
+            name=name,
+            signal_level=level,
+            drawdown=drawdown,
+            threshold=threshold,
+            key_driver="AKShare" if level > 0 else None
+        )
+
+    # ============================================================
+    # 备用数据源：Tushare
+    # ============================================================
     def _fetch_from_tushare(self) -> StandardMarketData:
         import tushare as ts
         ts.set_token(self.tushare_token)
         pro = ts.pro_api()
+
         target_date = self._get_target_date()
         date_str = target_date.strftime("%Y%m%d")
+
         try:
             index_df = pro.index_daily(ts_code="000001.SH", start_date=date_str, end_date=date_str)
             if index_df.empty:
@@ -245,9 +307,13 @@ class RealDataAdapter:
         except:
             pass
 
+        # 行业数据降级到 AKShare（但会使用上面的优化逻辑）
         logger.info("📊 Tushare 备用模式：行业数据从 AKShare 获取...")
         return self._fetch_from_akshare()
 
+    # ============================================================
+    # 兜底：模拟值
+    # ============================================================
     def _fetch_simulated(self) -> StandardMarketData:
         target_date = self._get_target_date()
         sectors = []
@@ -255,12 +321,30 @@ class RealDataAdapter:
             drawdown = round(random.uniform(15.0, 40.0), 1)
             threshold = THRESHOLD_MAP[name]
             excess = drawdown - threshold
-            if excess >= 10: level = 4
-            elif excess >= 5: level = 3
-            elif excess >= 0: level = 2
-            elif excess >= -5: level = 1
-            elif excess >= -10: level = -1
-            else: level = -2
-            sectors.append(SectorSignal(name=name, signal_level=level, drawdown=drawdown, threshold=threshold, key_driver="模拟值" if level > 0 else None))
+            if excess >= 10:
+                level = 4
+            elif excess >= 5:
+                level = 3
+            elif excess >= 0:
+                level = 2
+            elif excess >= -5:
+                level = 1
+            elif excess >= -10:
+                level = -1
+            else:
+                level = -2
+            sectors.append(SectorSignal(
+                name=name,
+                signal_level=level,
+                drawdown=drawdown,
+                threshold=threshold,
+                key_driver="模拟值" if level > 0 else None
+            ))
         freshness = FreshnessLevel.STALE
-        return StandardMarketData(timestamp=target_date.strftime("%Y-%m-%d %H:%M:%S"), freshness=freshness, sectors=sectors, index_trend="range", north_flow=None)
+        return StandardMarketData(
+            timestamp=target_date.strftime("%Y-%m-%d %H:%M:%S"),
+            freshness=freshness,
+            sectors=sectors,
+            index_trend="range",
+            north_flow=None
+        )
