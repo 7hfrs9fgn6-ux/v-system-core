@@ -31,49 +31,6 @@ AK_CODE_MAP = {
 CACHE_FILE = "memory_data/last_market_data.json"
 
 
-def get_today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
-
-
-def save_market_data(data: StandardMarketData):
-    """保存成功获取的市场数据到缓存"""
-    try:
-        os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
-        # 添加日期标记
-        save_dict = data.dict()
-        save_dict['_cache_date'] = get_today_str()
-        with open(CACHE_FILE, 'w') as f:
-            json.dump(save_dict, f, default=str)
-        logger.info(f"✅ 市场数据已缓存到 {CACHE_FILE}")
-    except Exception as e:
-        logger.warning(f"⚠️ 缓存市场数据失败: {e}")
-
-
-def load_market_data() -> StandardMarketData:
-    """从缓存加载市场数据"""
-    if not os.path.exists(CACHE_FILE):
-        return None
-    try:
-        with open(CACHE_FILE, 'r') as f:
-            data_dict = json.load(f)
-        # 检查是否为今日数据（可选，如果不要求必须今日则注释）
-        # cache_date = data_dict.get('_cache_date')
-        # if cache_date != get_today_str():
-        #     logger.info(f"📅 缓存日期 {cache_date} 非今日，不使用")
-        #     return None
-        sectors = [SectorSignal(**s) for s in data_dict['sectors']]
-        return StandardMarketData(
-            timestamp=data_dict['timestamp'],
-            freshness=FreshnessLevel(data_dict['freshness']),
-            sectors=sectors,
-            index_trend=data_dict['index_trend'],
-            north_flow=data_dict.get('north_flow')
-        )
-    except Exception as e:
-        logger.warning(f"⚠️ 加载缓存市场数据失败: {e}")
-        return None
-
-
 class RateLimiter:
     def __init__(self, max_calls: int, period: int = 60):
         self.max_calls = max_calls
@@ -97,41 +54,59 @@ class RateLimiter:
         return max(0, wait_time)
 
 
+def save_market_data(data: StandardMarketData):
+    try:
+        os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
+        with open(CACHE_FILE, 'w') as f:
+            json.dump(data.dict(), f, default=str)
+        logger.info(f"✅ 市场数据已缓存到 {CACHE_FILE}")
+    except Exception as e:
+        logger.warning(f"⚠️ 缓存失败: {e}")
+
+
+def load_market_data():
+    if not os.path.exists(CACHE_FILE):
+        return None
+    try:
+        with open(CACHE_FILE, 'r') as f:
+            data_dict = json.load(f)
+        sectors = [SectorSignal(**s) for s in data_dict['sectors']]
+        return StandardMarketData(
+            timestamp=data_dict['timestamp'],
+            freshness=FreshnessLevel(data_dict['freshness']),
+            sectors=sectors,
+            index_trend=data_dict['index_trend'],
+            north_flow=data_dict.get('north_flow')
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ 加载缓存失败: {e}")
+        return None
+
+
 class RealDataAdapter:
     def __init__(self, phase: str = "pre"):
         self.phase = phase
         self.tushare_token = os.environ.get("TUSHARE_TOKEN")
         self.use_tushare = bool(self.tushare_token and self.tushare_token != "dummy")
         self.data_source = "AKShare"
-        self._rate_limiter = RateLimiter(max_calls=40, period=60)  # 更保守
+        self._rate_limiter = RateLimiter(max_calls=60, period=60)
         self._index_close = 0
         self._index_pct = 0
 
     def fetch_all(self) -> StandardMarketData:
         logger.info("🌐 开始获取数据...")
 
-        # ✅ 1. 优先尝试从缓存读取（任何阶段）
-        cached = load_market_data()
-        if cached is not None:
-            logger.info("📂 使用缓存市场数据（跳过网络请求）")
-            self.data_source = "Cache"
-            # 从缓存中恢复大盘数据（如果有）
-            if hasattr(cached, '_index_data'):
-                self._index_close = cached._index_data.get('close', 0) if hasattr(cached, '_index_data') else 0
-            return cached
-
-        # ✅ 2. 尝试 AKShare（快速超时）
+        # 1. 尝试 AKShare（快速超时）
         try:
             logger.info("📊 使用 AKShare 获取行业数据...")
             self.data_source = "AKShare"
             result = self._fetch_from_akshare()
-            # 成功则保存缓存
             save_market_data(result)
             return result
         except Exception as e:
-            logger.warning(f"⚠️ AKShare 失败 ({e})，尝试备用...")
+            logger.warning(f"⚠️ AKShare 失败: {e}")
 
-        # ✅ 3. 尝试 Tushare（如果配置）
+        # 2. 尝试 Tushare
         if self.use_tushare:
             try:
                 logger.info("📊 降级到 Tushare...")
@@ -140,16 +115,21 @@ class RealDataAdapter:
                 save_market_data(result)
                 return result
             except Exception as e2:
-                logger.warning(f"⚠️ Tushare 也失败 ({e2})")
+                logger.warning(f"⚠️ Tushare 失败: {e2}")
 
-        # ✅ 4. 最终兜底：模拟值
-        logger.warning("⚠️ 所有数据源失败，使用模拟值")
+        # 3. 回退缓存
+        cached = load_market_data()
+        if cached is not None:
+            logger.warning("⚠️ 使用缓存数据")
+            self.data_source = "Cache"
+            return cached
+
+        # 4. 模拟值
+        logger.warning("⚠️ 无缓存，使用模拟值")
         self.data_source = "Simulated"
         return self._fetch_simulated()
 
-    # --------------------------------------------------------------
-    # 其他方法
-    # --------------------------------------------------------------
+    # ---------- 以下为底层获取方法 ----------
     def _get_target_date(self):
         phase_days_back = {"pre": 1, "intraday_a": 0, "intraday_b": 0, "post": 0, "night": 0}
         days_back = phase_days_back.get(self.phase, 0)
@@ -225,18 +205,18 @@ class RealDataAdapter:
         except:
             pass
 
-        # 各板块（极速并发 + 极短超时）
+        # 各板块
         sectors = []
         logger.info("📊 AKShare 获取各板块52周回撤...")
-        with ThreadPoolExecutor(max_workers=1) as executor:  # 串行执行，避免服务器压力
+        with ThreadPoolExecutor(max_workers=2) as executor:
             future_to_name = {executor.submit(self._fetch_single_sector, name): name for name in SECTOR_NAMES}
             for future in future_to_name:
                 name = future_to_name[future]
                 try:
-                    result = future.result(timeout=6)  # ⏱️ 6秒超时
+                    result = future.result(timeout=8)   # 8秒超时
                     sectors.append(result)
                 except FuturesTimeoutError:
-                    logger.warning(f"⚠️ {name} 获取超时（6s），使用随机值")
+                    logger.warning(f"⚠️ {name} 获取超时（8s），使用随机值")
                     sectors.append(self._make_fallback_sector(name))
                 except Exception as e:
                     logger.warning(f"⚠️ {name} 获取异常 ({e})，使用随机值")
