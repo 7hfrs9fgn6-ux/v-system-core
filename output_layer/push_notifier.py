@@ -85,13 +85,9 @@ class PushNotifier:
             self._store_to_notion(result, phase)
             return False
 
-        # ✅ 安全获取大盘数据
-        if hasattr(result, '_index_data') and result._index_data is not None:
+        if hasattr(result, '_index_data'):
             self._index_close = result._index_data.get('close', 0)
             self._index_pct = result._index_data.get('pct', 0)
-        else:
-            self._index_close = 0
-            self._index_pct = 0
 
         self._macro_data = getattr(result, '_macro_data', {})
         self._indices = getattr(result, '_indices', {})
@@ -198,36 +194,48 @@ class PushNotifier:
 
         # ---------- 2. 信号汇总（按等级分组） ----------
         signal_dict = {s.name: s for s in result.signals}
+        # 获取持仓板块名称列表（用于标记持仓）
         holding_sector_names = list(set(self.holding_sectors))
 
+        # 按信号等级分类
+        # 机会信号（等级>=3）
         strong_buy = [s for s in result.signals if s.signal_level >= 3]
+        # 观察中（1~2）
         watch = [s for s in result.signals if 1 <= s.signal_level < 3]
+        # 风险信号（-2~-1）
         risk = [s for s in result.signals if s.signal_level < 0]
 
+        # 排序：先按等级降序，再按名称
         strong_buy.sort(key=lambda x: (-x.signal_level, x.name))
         watch.sort(key=lambda x: (-x.signal_level, x.name))
-        risk.sort(key=lambda x: (x.signal_level, x.name))
+        risk.sort(key=lambda x: (x.signal_level, x.name))  # 最负的最靠前
 
+        # 显示机会信号
         if strong_buy:
             lines.append("【🟢 机会信号】")
             for s in strong_buy:
+                # 标注持仓
                 tag = " 📌" if s.name in holding_sector_names else ""
                 emoji_s = "🟢" if s.signal_level >= 4 else "🟢"
                 lines.append(f"  {emoji_s} {s.name}{tag}")
+                # 触发逻辑
                 if s.drawdown >= s.threshold:
                     excess = s.drawdown - s.threshold
                     lines.append(f"    └─ 回撤{s.drawdown}% (阈值{s.threshold}%) 超出{excess:.1f}%")
                 else:
                     lines.append(f"    └─ 回撤{s.drawdown}% (阈值{s.threshold}%)")
+                # 消息面（如果有）
                 if hasattr(result, 'sentiment') and result.sentiment and s.name in result.sentiment:
                     sent = result.sentiment[s.name]
                     intensity = sent.get('intensity_score', 0)
                     emotion = sent.get('emotion_label', '中性')
                     lines.append(f"    └─ 消息面: {intensity}/10 ({emotion})")
+                # 逻辑简述（如果有Agent分析，提取摘要）
                 lines.append("")
         else:
             lines.append("【🟢 机会信号】无")
 
+        # 观察中
         if watch:
             lines.append("【🟡 观察中】")
             for s in watch:
@@ -248,6 +256,7 @@ class PushNotifier:
         else:
             lines.append("【🟡 观察中】无")
 
+        # 风险信号
         if risk:
             lines.append("【🔴 风险信号】")
             for s in risk:
@@ -277,6 +286,7 @@ class PushNotifier:
             for fund_code, fund_info in self.holding_map.items():
                 fund_name = fund_info["name"]
                 sectors = fund_info["sectors"]
+                # 取该基金映射板块中信号最强的
                 best_sector = None
                 best_level = -99
                 best_drawdown = 0
@@ -293,16 +303,13 @@ class PushNotifier:
                     if best_level >= 3:
                         emoji_f = "🟢"
                         status = "机会信号"
-                        action = "✅ 关注"
                     elif best_level >= 1:
                         emoji_f = "🟡"
                         status = "观察中"
-                        action = "🔍 等待"
                     else:
                         emoji_f = "🔴"
                         status = "风险信号"
-                        action = "⚠️ 谨慎"
-                    lines.append(f"  {emoji_f} {fund_name}：{status}（{best_sector}驱动）{action}")
+                    lines.append(f"  {emoji_f} {fund_name}：{status}（{best_sector}驱动）")
                 else:
                     lines.append(f"  ⚪ {fund_name}：暂不操作")
         else:
@@ -311,14 +318,15 @@ class PushNotifier:
         lines.append("")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        # ---------- 4. 风险预警 ----------
+        # ---------- 4. 风险预警（如果有） ----------
+        # 提取风险信号板块
         if risk:
             lines.append("【⚠️ 风险预警】")
-            for s in risk[:3]:
+            for s in risk[:3]:  # 最多显示3个
                 lines.append(f"  🔴 {s.name}：回撤仅{s.drawdown}%，接近高位，注意风险")
             lines.append("")
 
-        # ---------- 5. 影子系统验证 ----------
+        # ---------- 5. 影子系统验证（如果存在） ----------
         if hasattr(result, 'shadow') and result.shadow:
             reliability = result.shadow.get('reliability', {})
             lines.append("【👻 影子系统验证】")
@@ -336,19 +344,23 @@ class PushNotifier:
             lines.append("")
             lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        # ---------- 6. AI 总结 ----------
+        # ---------- 6. AI 总结（作为附录） ----------
+        # 优先使用Agent研报内容（已过滤内部思考）
         ai_summary = ""
         if hasattr(result, 'agent_analysis') and result.agent_analysis:
             agent_data = result.agent_analysis
             response = agent_data.get('response', '')
             if response:
                 cleaned = self._clean_agent_response(response)
+                # 提取前200字符作为摘要（或整个摘要）
                 ai_summary = cleaned.strip()
         if not ai_summary:
+            # 降级：使用AI点评
             ai_summary = self.commentator.generate_comment(result, self.holding_sectors)
 
         if ai_summary:
             lines.append("【🤖 AI 盘后总结】")
+            # 限制长度，避免过长
             if len(ai_summary) > 500:
                 ai_summary = ai_summary[:500] + "..."
             lines.append(f"  {ai_summary}")
@@ -363,6 +375,8 @@ class PushNotifier:
             lines.append("  🟡 系统判断参考价值有限，建议结合其他信息确认")
         else:
             lines.append("  🔴 系统判断不可靠，建议暂停决策")
+
+        # 数据时间
         lines.append(f"⏰ 数据时间：{result.analysis_time[:16]} CST")
 
         return "\n".join(lines)
@@ -371,12 +385,24 @@ class PushNotifier:
     # 辅助：过滤Agent内部思考
     # ============================================================
     def _clean_agent_response(self, response: str) -> str:
+        """过滤Agent思考过程，保留有用内容"""
         filter_patterns = [
-            "好的，现在我来", "现在我来获取", "接下来我来", "让我来", "我先",
-            "data already collected", "now I will", "let me", "I'll get", "I will",
-            "proceeding to", "获取更多补充数据", "我们开始", "先获取",
-            "好的，以下", "正在获取", "我来生成", "现在开始", "首先",
-            "然后", "接着", "我再", "还需要", "为了获取", "我们看看", "接下来"
+            "好的，现在我来",
+            "现在我来获取",
+            "接下来我来",
+            "让我来",
+            "我先",
+            "data already collected",
+            "now I will",
+            "let me",
+            "I'll get",
+            "I will",
+            "proceeding to",
+            "获取更多补充数据",
+            "我们开始",
+            "先获取",
+            "好的，以下",
+            "正在获取",
         ]
         lines = response.split('\n')
         cleaned = []
@@ -384,6 +410,7 @@ class PushNotifier:
             line_strip = line.strip()
             if not line_strip:
                 continue
+            # 跳过包含过滤词的行
             skip = False
             for pat in filter_patterns:
                 if pat in line:
@@ -391,13 +418,14 @@ class PushNotifier:
                     break
             if skip:
                 continue
+            # 跳过只有分隔符的行
             if line_strip in ['---', '***', '___']:
                 continue
             cleaned.append(line)
         return '\n'.join(cleaned)
 
     # ============================================================
-    # 夜间预测专用格式
+    # 夜间预测专用格式（保持简洁）
     # ============================================================
     def _format_night_message(self, result: SignalResult) -> str:
         phase_info = self.phase_config.get("night", {"name": "夜间预测", "emoji": "🌙"})
