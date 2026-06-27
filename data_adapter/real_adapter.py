@@ -2,7 +2,6 @@ import os
 import random
 import logging
 import time
-import json
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from output_layer.signal_result import StandardMarketData, SectorSignal, FreshnessLevel
@@ -22,7 +21,6 @@ THRESHOLD_MAP = {
     "银行": 20.0, "非银金融": 20.0, "公用事业": 15.0, "煤炭": 20.0, "石油石化": 20.0
 }
 
-# AKShare 申万行业代码（纯数字）
 AK_CODE_MAP = {
     "电子": "801080",
     "计算机": "801750",
@@ -65,7 +63,7 @@ class RateLimiter:
         return max(0, wait_time)
 
 
-def retry_on_failure(max_attempts=5, delays=[0, 1, 2, 4, 8]):
+def retry_on_failure(max_attempts=2, delays=[0, 1, 2]):
     def decorator(func):
         def wrapper(*args, **kwargs):
             last_exception = None
@@ -157,9 +155,9 @@ class RealDataAdapter:
         return None
 
     # ============================================================
-    # 主数据源：AKShare（增强重试）
+    # 主数据源：AKShare（优化重试策略）
     # ============================================================
-    @retry_on_failure(max_attempts=3, delays=[0, 2, 5])
+    @retry_on_failure(max_attempts=2, delays=[0, 2])
     def _fetch_from_akshare(self) -> StandardMarketData:
         import akshare as ak
         target_date = self._get_target_date()
@@ -206,11 +204,11 @@ class RealDataAdapter:
         except:
             pass
 
-        # 各板块（并发获取，每个板块内部有重试）
+        # 各板块（优化并发和重试）
         sectors = []
         logger.info("📊 AKShare 获取各板块52周回撤...")
 
-        with ThreadPoolExecutor(max_workers=3) as executor:  # 降低并发数，减少服务器压力
+        with ThreadPoolExecutor(max_workers=5) as executor:  # 增加并发数
             future_to_name = {
                 executor.submit(self._fetch_single_sector_with_retry, name): name
                 for name in SECTOR_NAMES
@@ -218,7 +216,7 @@ class RealDataAdapter:
             for future in future_to_name:
                 name = future_to_name[future]
                 try:
-                    result = future.result(timeout=20)  # 增加超时到20秒
+                    result = future.result(timeout=20)  # 整体超时20秒
                     sectors.append(result)
                 except FuturesTimeoutError:
                     logger.warning(f"⚠️ {name} 获取超时，使用随机值")
@@ -238,16 +236,15 @@ class RealDataAdapter:
         )
 
     def _fetch_single_sector_with_retry(self, name: str) -> SectorSignal:
-        """单个板块获取，内部重试5次，专门处理 JSON 解析错误"""
-        max_attempts = 5
-        delays = [0, 1, 2, 4, 8]
+        """单个板块获取，优化重试次数和等待时间"""
+        max_attempts = 2  # 从5次减为2次
+        delays = [0, 1]   # 等待0秒、1秒
         last_exception = None
         for attempt in range(max_attempts):
             try:
                 return self._fetch_single_sector(name)
             except Exception as e:
                 last_exception = e
-                # 如果是 JSON 解析错误，给出更明确的提示
                 if "Expecting value" in str(e):
                     logger.warning(f"⚠️ {name}: AKShare 返回非 JSON 数据 (尝试 {attempt+1}/{max_attempts})")
                 else:
