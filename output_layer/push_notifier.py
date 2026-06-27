@@ -27,9 +27,12 @@ class PushNotifier:
         self._push_interval = 2
         self._sent_cache = {}
         self._cache_ttl = 3600
+        # 大盘数据
         self._index_close = 0
         self._index_pct = 0
+        # 宏观数据
         self._macro_data = {}
+        # 市场数据
         self._indices = {}
         self._market_stats = {}
         self._sector_flow = {}
@@ -85,11 +88,15 @@ class PushNotifier:
             self._store_to_notion(result, phase)
             return False
 
+        # 读取大盘数据
         if hasattr(result, '_index_data'):
             self._index_close = result._index_data.get('close', 0)
             self._index_pct = result._index_data.get('pct', 0)
 
+        # 读取宏观数据
         self._macro_data = getattr(result, '_macro_data', {})
+
+        # 读取市场数据
         self._indices = getattr(result, '_indices', {})
         self._market_stats = getattr(result, '_market_stats', {})
         self._sector_flow = getattr(result, '_sector_flow', {})
@@ -137,90 +144,18 @@ class PushNotifier:
     def _format_message(self, result: SignalResult, phase: str) -> str:
         if phase == "night":
             return self._format_night_message(result)
-        # ✅ P3：如果 Agent 已生成研报级内容，使用研报级格式
+
+        # 如果 Agent 已生成研报级内容，使用研报格式
         if hasattr(result, 'agent_analysis') and result.agent_analysis:
             agent_data = result.agent_analysis
-            if agent_data.get('status') in ['success', 'warning']:
+            if agent_data.get('status') == 'success' or agent_data.get('status') == 'warning':
                 return self._format_p3_report(result, phase)
-        return self._format_p2_normal(result, phase)
+
+        # 否则使用标准格式
+        return self._format_standard_message(result, phase)
 
     # ============================================================
-    # P2正常格式（降级方案）
-    # ============================================================
-    def _format_p2_normal(self, result: SignalResult, phase: str) -> str:
-        phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
-        phase_text = phase_info.get("name", phase)
-        emoji = phase_info.get("emoji", "📊")
-
-        signal_dict = {s.name: s for s in result.signals}
-        lines = []
-
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append(f"{emoji} V系统 {phase_text}")
-        lines.append(f"📅 {result.analysis_time[:16]}")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-        if self._index_close > 0:
-            arrow = "📈" if self._index_pct > 0 else "📉" if self._index_pct < 0 else "➡️"
-            lines.append(f"【📊 上证指数】{self._index_close:.2f}  {arrow} {self._index_pct:+.2f}%")
-
-        # 简化版持仓信号
-        lines.append("")
-        lines.append("【📌 你的持仓信号】")
-        seen_sectors = set()
-        unique_holdings = []
-        for fund_code, fund_info in self.holding_map.items():
-            sectors = fund_info["sectors"]
-            for sec in sectors:
-                if sec in seen_sectors:
-                    continue
-                seen_sectors.add(sec)
-                if sec in signal_dict:
-                    s = signal_dict[sec]
-                    emoji_s = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠" if s.signal_level >= -1 else "🔴"
-                    status = "机会信号" if s.signal_level >= 3 else "观察中" if s.signal_level >= 1 else "风险提示" if s.signal_level >= -1 else "风险信号"
-                    funds_with_sector = [f["name"] for f in self.holding_map.values() if sec in f["sectors"]]
-                    fund_label = f"（{','.join(funds_with_sector)}）"
-                    unique_holdings.append({
-                        "sector": sec,
-                        "level": s.signal_level,
-                        "drawdown": s.drawdown,
-                        "threshold": s.threshold,
-                        "emoji": emoji_s,
-                        "status": status,
-                        "funds": fund_label
-                    })
-        unique_holdings.sort(key=lambda x: x["level"], reverse=True)
-        if unique_holdings:
-            for h in unique_holdings[:6]:
-                lines.append(f"  {h['emoji']} {h['status']} {h['sector']} {h['funds']}")
-                lines.append(f"     └─ 回撤 {h['drawdown']}% / 阈值 {h['threshold']}%")
-
-        # AI点评
-        ai_comment = self.commentator.generate_comment(result, self.holding_sectors)
-        if ai_comment:
-            lines.append("")
-            lines.append("【🤖 AI 点评】")
-            lines.append(f"  {ai_comment}")
-
-        # Agent分析（简短）
-        if hasattr(result, 'agent_analysis') and result.agent_analysis:
-            agent_data = result.agent_analysis
-            response = agent_data.get('response', '')
-            if response:
-                cleaned = self._clean_agent_response(response)
-                if cleaned:
-                    lines.append("")
-                    lines.append("【🧠 智能代理分析】")
-                    if len(cleaned) > 300:
-                        cleaned = cleaned[:300] + "..."
-                    lines.append(f"  {cleaned}")
-
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        return "\n".join(lines)
-
-    # ============================================================
-    # P3研报级格式（过滤内部信息）
+    # P3 研报级格式（修复版：过滤内部信息）
     # ============================================================
     def _format_p3_report(self, result: SignalResult, phase: str) -> str:
         phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
@@ -261,7 +196,7 @@ class PushNotifier:
                     status = "🔴 普跌"
                 lines.append(f"【📊 涨跌家数】{status} | 上涨{up}家 / 下跌{down}家")
 
-        # ✅ Agent研报内容（过滤内部思考）
+        # Agent 研报内容（过滤内部思考）
         if hasattr(result, 'agent_analysis') and result.agent_analysis:
             agent_data = result.agent_analysis
             response = agent_data.get('response', '')
@@ -275,26 +210,17 @@ class PushNotifier:
                     for para in paragraphs:
                         if para.strip():
                             if para.startswith('#'):
-                                # 标题
                                 title = para.lstrip('#').strip()
                                 lines.append(f"【{title}】")
                             else:
-                                # 普通段落，保留缩进，但过滤掉表格中的分隔线
                                 for line in para.split('\n'):
-                                    clean_line = line.strip()
-                                    if clean_line:
-                                        # 跳过表格分隔符行（如 |---|）
-                                        if clean_line.startswith('|') and '---' in clean_line:
+                                    if line.strip():
+                                        if line.strip().startswith('|') and '---' in line:
                                             continue
-                                        # 跳过单独的分隔线
-                                        if clean_line in ['---', '***', '___']:
-                                            continue
-                                        lines.append(f"  {clean_line}")
+                                        lines.append(f"  {line.strip()}")
                     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        # ✅ 不显示工具调用次数，不显示告警信息
-
-        # 操作建议（纯净版）
+        # 操作建议（不显示告警信息）
         lines.append("")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         lines.append("【📌 操作建议】")
@@ -304,6 +230,68 @@ class PushNotifier:
             lines.append("  🟡 系统判断参考价值有限，建议结合其他信息确认")
         else:
             lines.append("  🔴 系统判断不可靠，建议暂停决策")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        return "\n".join(lines)
+
+    # ============================================================
+    # 标准格式（非研报级）
+    # ============================================================
+    def _format_standard_message(self, result: SignalResult, phase: str) -> str:
+        phase_info = self.phase_config.get(phase, {"name": phase, "emoji": "📊"})
+        phase_text = phase_info.get("name", phase)
+        emoji = phase_info.get("emoji", "📊")
+
+        signal_dict = {s.name: s for s in result.signals}
+        lines = []
+
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        lines.append(f"{emoji} V系统 {phase_text}")
+        lines.append(f"📅 {result.analysis_time[:16]}")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+        if self._index_close > 0:
+            arrow = "📈" if self._index_pct > 0 else "📉" if self._index_pct < 0 else "➡️"
+            lines.append(f"【📊 上证指数】{self._index_close:.2f}  {arrow} {self._index_pct:+.2f}%")
+
+        # 持仓信号
+        lines.append("")
+        lines.append("【📌 你的持仓信号】")
+        seen_sectors = set()
+        unique_holdings = []
+        for fund_code, fund_info in self.holding_map.items():
+            sectors = fund_info["sectors"]
+            for sec in sectors:
+                if sec in seen_sectors:
+                    continue
+                seen_sectors.add(sec)
+                if sec in signal_dict:
+                    s = signal_dict[sec]
+                    emoji_s = "🟢" if s.signal_level >= 3 else "🟡" if s.signal_level >= 1 else "🟠" if s.signal_level >= -1 else "🔴"
+                    status = "机会信号" if s.signal_level >= 3 else "观察中" if s.signal_level >= 1 else "风险提示" if s.signal_level >= -1 else "风险信号"
+                    funds_with_sector = [f["name"] for f in self.holding_map.values() if sec in f["sectors"]]
+                    fund_label = f"（{','.join(funds_with_sector)}）"
+                    unique_holdings.append({
+                        "sector": sec,
+                        "level": s.signal_level,
+                        "drawdown": s.drawdown,
+                        "threshold": s.threshold,
+                        "emoji": emoji_s,
+                        "status": status,
+                        "funds": fund_label
+                    })
+        unique_holdings.sort(key=lambda x: x["level"], reverse=True)
+        if unique_holdings:
+            for h in unique_holdings[:6]:
+                lines.append(f"  {h['emoji']} {h['status']} {h['sector']} {h['funds']}")
+                lines.append(f"     └─ 回撤 {h['drawdown']}% / 阈值 {h['threshold']}%")
+
+        # AI点评
+        ai_comment = self.commentator.generate_comment(result, self.holding_sectors)
+        if ai_comment:
+            lines.append("")
+            lines.append("【🤖 AI 点评】")
+            lines.append(f"  {ai_comment}")
+
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
         return "\n".join(lines)
 
@@ -343,12 +331,13 @@ class PushNotifier:
             agent_data = result.agent_analysis
             response = agent_data.get('response', '')
             if response:
+                # 也过滤夜间预测的内部思考
                 cleaned = self._clean_agent_response(response)
                 if cleaned:
                     lines.append("")
                     lines.append("【🧠 晚间消息汇总】")
-                    if len(cleaned) > 200:
-                        cleaned = cleaned[:200] + "..."
+                    if len(cleaned) > 250:
+                        cleaned = cleaned[:250] + "..."
                     lines.append(f"  {cleaned}")
 
         lines.append("")
@@ -373,11 +362,11 @@ class PushNotifier:
     # 辅助方法：过滤Agent内部思考
     # ============================================================
     def _clean_agent_response(self, response: str) -> str:
-        """过滤掉Agent的内部思考过程"""
+        """过滤掉Agent的内部思考过程，只保留最终分析内容"""
         if not response:
             return ""
 
-        # 需要过滤的关键词（内部思考特征）
+        # 需要过滤的关键词（包含这些词的行通常是内部思考）
         filter_patterns = [
             "好的，现在我来",
             "现在我来获取",
@@ -393,30 +382,53 @@ class PushNotifier:
             "获取更多补充数据",
             "我们开始",
             "先获取",
-            "好的，以下是根据",
-            "根据所有获取到的数据",
-            "根据以上所有工具调用结果",
-            "现在生成",
-            "开始生成",
+            "正在调用",
+            "开始获取",
+            "开始分析",
         ]
 
         lines = response.split('\n')
         cleaned_lines = []
+        skip_next = False
+
         for line in lines:
-            # 跳过空行
-            if not line.strip():
+            line_stripped = line.strip()
+            # 跳过空行（但保留段落间的空行）
+            if not line_stripped:
+                # 如果之前有内容，保留一个空行
+                if cleaned_lines and cleaned_lines[-1] != '':
+                    cleaned_lines.append('')
                 continue
-            # 检查是否包含内部思考关键词
+
+            # 检查是否包含过滤关键词
             skip = False
             for pattern in filter_patterns:
                 if pattern in line:
                     skip = True
                     break
-            if skip:
-                continue
-            # 过滤掉只有分隔符的行
-            if line.strip() in ['---', '***', '___', '===']:
-                continue
-            cleaned_lines.append(line)
 
-        return '\n'.join(cleaned_lines)
+            # 跳过纯分隔符
+            if line_stripped in ['---', '***', '___']:
+                skip = True
+
+            # 跳过表头分隔线
+            if line_stripped.startswith('|') and '---' in line_stripped:
+                skip = True
+
+            # 检查是否以“###”开头（可能是内部标记）
+            if line_stripped.startswith('###'):
+                skip = True
+
+            if not skip:
+                cleaned_lines.append(line)
+
+        # 合并，去除多余空行
+        result = []
+        for i, line in enumerate(cleaned_lines):
+            if line == '':
+                if i > 0 and cleaned_lines[i-1] != '' and i+1 < len(cleaned_lines) and cleaned_lines[i+1] != '':
+                    result.append(line)
+            else:
+                result.append(line)
+
+        return '\n'.join(result)
