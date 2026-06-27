@@ -277,6 +277,72 @@ class PushNotifier:
 
             lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
+                # ========== 市场数据展示（P2新增） ==========
+        if hasattr(result, '_indices') and result._indices:
+            indices = result._indices.get('indices', {})
+            if indices:
+                lines.append("")
+                lines.append("【📊 主要指数】")
+                # 只显示5个主要指数
+                for name in ["上证指数", "深证成指", "创业板指", "科创50", "北证50"]:
+                    if name in indices:
+                        idx = indices[name]
+                        price = idx.get('price', 0)
+                        pct = idx.get('pct_change', 0)
+                        amount = idx.get('amount', 0)
+                        if price:
+                            arrow = "📈" if pct > 0 else "📉" if pct < 0 else "➡️"
+                            amount_str = f"成交{amount/1e8:.1f}亿" if amount else ""
+                            lines.append(f"  {name}: {price:.2f}  {arrow} {pct:+.2f}%  {amount_str}")
+
+        # ========== 涨跌家数展示 ==========
+        if hasattr(result, '_market_stats') and result._market_stats:
+            stats = result._market_stats
+            up = stats.get('up', 0)
+            down = stats.get('down', 0)
+            flat = stats.get('flat', 0)
+            total = stats.get('total', 0)
+            if total > 0:
+                lines.append("")
+                lines.append("【📊 涨跌家数】")
+                # 计算涨跌比
+                if down > 0:
+                    ratio = up / down
+                else:
+                    ratio = 0
+                if ratio > 2:
+                    status = "🟢 普涨"
+                elif ratio > 0.5:
+                    status = "🟡 震荡"
+                else:
+                    status = "🔴 普跌"
+                lines.append(f"  {status} 上涨{up}家 / 下跌{down}家 / 平盘{flat}家")
+                if down > 0:
+                    lines.append(f"  涨跌比: {ratio:.2f}")
+
+        # ========== 板块资金流向TOP5 ==========
+        if hasattr(result, '_sector_flow') and result._sector_flow:
+            flow = result._sector_flow
+            inflow = flow.get('net_inflow_top5', [])
+            outflow = flow.get('net_outflow_top5', [])
+            if inflow or outflow:
+                lines.append("")
+                lines.append("【💰 板块资金流向】")
+                if inflow:
+                    lines.append("  📈 净流入TOP5:")
+                    for item in inflow[:3]:  # 只显示前3
+                        sector = item.get('sector', '')
+                        flow_val = item.get('flow', 0)
+                        if flow_val:
+                            lines.append(f"    {sector}: {flow_val/1e8:.2f}亿")
+                if outflow:
+                    lines.append("  📉 净流出TOP5:")
+                    for item in outflow[:3]:
+                        sector = item.get('sector', '')
+                        flow_val = item.get('flow', 0)
+                        if flow_val:
+                            lines.append(f"    {sector}: {flow_val/1e8:.2f}亿")
+                            
         # 核心建议
         lines.append("")
         lines.append("【💡 今日核心建议】")
