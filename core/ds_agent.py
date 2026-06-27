@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DS API 智能代理（大脑）- 优化版
-支持更多工具调用 + 增强响应内容
-对应精阶段 V1.1.50 智能代理架构
+DS API 智能代理（大脑）- P3升级版
+支持研报级分析输出
 """
 
 import os
@@ -21,41 +20,32 @@ logger = logging.getLogger(__name__)
 
 class DSAgent:
     """
-    DS API 智能代理
-    自主识别意图 → 决策工具调用 → 多步推理 → 返回结果
+    DS API 智能代理 - P3 升级版
+    自主识别意图 → 决策工具调用 → 多步推理 → 返回研报级结果
     """
 
     def __init__(self):
         self.api_key = os.environ.get("DEEPSEEK_API_KEY")
         self.base_url = "https://api.deepseek.com/v1"
         self.enabled = bool(self.api_key and self.api_key != "")
-        
-        # ✅ 优化：提高调用限制
-        self.max_tool_calls = 10      # 从 5 提高到 10
-        self.max_reasoning_depth = 5  # 从 3 提高到 5
-        self.timeout = 30             # 从 15 提高到 30
+        self.max_tool_calls = 10
+        self.max_reasoning_depth = 5
+        self.timeout = 30
 
-        # 工具注册表
         self.tools = get_tool_schema()
         self.tool_functions = TOOL_REGISTRY
 
         if self.enabled:
-            logger.info(f"✅ DS API 智能代理已初始化，已注册 {len(self.tools)} 个工具")
+            logger.info(f"✅ DS API 智能代理已初始化（P3研报级），已注册 {len(self.tools)} 个工具")
             logger.info(f"   📊 最大工具调用: {self.max_tool_calls} 次")
             logger.info(f"   📊 最大推理深度: {self.max_reasoning_depth} 层")
         else:
             logger.warning("⚠️ DS API Key 未配置，智能代理未启用")
 
     def think(self, user_query: str, context: Optional[Dict] = None) -> Dict:
-        """
-        核心方法：接收用户查询，返回推理结果
-        """
+        """核心方法：接收用户查询，返回推理结果"""
         if not self.enabled:
-            return {
-                "status": "error",
-                "error": "DS API 未启用",
-                "mode": "fallback"
-            }
+            return {"status": "error", "error": "DS API 未启用", "mode": "fallback"}
 
         messages = self._build_messages(user_query, context)
         tool_calls_made = 0
@@ -68,29 +58,18 @@ class DSAgent:
                 reasoning_depth += 1
                 logger.info(f"🔄 推理轮次 {reasoning_depth}/{self.max_reasoning_depth}")
 
-                # 调用 DS API
                 response = self._call_ds_api(messages)
-
                 if not response:
-                    return {
-                        "status": "error",
-                        "error": "DS API 调用失败",
-                        "mode": "fallback",
-                        "tool_calls_made": tool_calls_made,
-                        "reasoning_depth": reasoning_depth
-                    }
+                    return {"status": "error", "error": "DS API 调用失败", "mode": "fallback"}
 
                 message = response.get("choices", [{}])[0].get("message", {})
                 tool_calls = message.get("tool_calls", [])
 
-                # ✅ 保存助手响应内容
                 content = message.get("content", "")
                 if content:
                     all_responses.append(content)
 
-                # ✅ 如果没有工具调用，直接返回结果
                 if not tool_calls:
-                    # 如果有响应内容则使用，否则使用最后一条响应
                     final_response = content if content else (all_responses[-1] if all_responses else "分析完成")
                     return {
                         "status": "success",
@@ -102,24 +81,16 @@ class DSAgent:
                         "mode": "agent_complete"
                     }
 
-                # ✅ 执行工具调用
                 tool_results = self._execute_tool_calls(tool_calls)
-                
-                # 记录成功执行的工具
                 successful_calls = sum(1 for r in tool_results if r.get("result", {}).get("status") != "error")
                 tool_calls_made += successful_calls
                 all_tool_results.extend(tool_results)
 
-                # ✅ 将助手消息添加到对话中
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": content or "正在调用工具获取数据..."
-                }
+                assistant_msg = {"role": "assistant", "content": content or "正在调用工具获取数据..."}
                 if tool_calls:
                     assistant_msg["tool_calls"] = tool_calls
                 messages.append(assistant_msg)
 
-                # ✅ 将工具执行结果添加到对话中
                 for result in tool_results:
                     messages.append({
                         "role": "tool",
@@ -127,23 +98,23 @@ class DSAgent:
                         "content": json.dumps(result["result"], ensure_ascii=False)
                     })
 
-            # ✅ 达到最大调用次数，生成最终总结
+            # 达到最大次数，请求总结
             logger.info(f"⚠️ 达到最大工具调用次数 ({self.max_tool_calls})，生成总结")
-            
-            # 要求 DS API 生成最终总结
             summary_prompt = {
                 "role": "user",
-                "content": """请根据以上所有工具调用结果，生成一份完整的中文分析报告。
+                "content": """请根据以上所有工具调用结果，生成一份完整的研报级分析报告。
 
-报告必须包含以下三个部分（每部分至少2句话）：
-1. 📊 数据摘要：列出所有关键数据和发现
-2. 📈 分析结论：基于数据给出明确判断
-3. 💡 操作建议：给出具体可执行的操作建议
+报告必须包含以下五部分（每部分至少2句话）：
+1. 📊 市场概览：大盘指数、涨跌家数、市场情绪
+2. 📈 板块逻辑分析：最强板块为什么强？最弱板块为什么弱？详细解释逻辑
+3. ⚠️ 风险预警：列出主要风险，标注等级（高/中/低）和应对建议
+4. 💡 操作建议：针对持仓基金给出具体操作建议
+5. 📌 总结：一句话总结今日市场
 
-请确保报告结构清晰，内容完整。"""
+请确保报告结构清晰，内容完整，语言专业但有温度。"""
             }
             messages.append(summary_prompt)
-            
+
             final_response = self._call_ds_api(messages)
             if final_response:
                 final_content = final_response.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -162,97 +133,60 @@ class DSAgent:
 
         except Exception as e:
             logger.error(f"DS Agent 执行异常: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "mode": "fallback",
-                "tool_calls_made": tool_calls_made,
-                "reasoning_depth": reasoning_depth
-            }
+            return {"status": "error", "error": str(e), "mode": "fallback"}
 
     def _build_messages(self, user_query: str, context: Optional[Dict] = None) -> List[Dict]:
-        """构建消息列表"""
-        system_prompt = self._get_system_prompt()
-
-        messages = [{
-            "role": "system",
-            "content": system_prompt
-        }]
-
+        messages = [{"role": "system", "content": self._get_system_prompt()}]
         if context:
-            messages.append({
-                "role": "user",
-                "content": f"当前上下文: {json.dumps(context, ensure_ascii=False)}"
-            })
-
-        messages.append({
-            "role": "user",
-            "content": user_query
-        })
-
+            messages.append({"role": "user", "content": f"当前上下文: {json.dumps(context, ensure_ascii=False)}"})
+        messages.append({"role": "user", "content": user_query})
         return messages
 
     def _get_system_prompt(self) -> str:
-        """✅ 优化：增强系统提示词，强制生成文字总结"""
+        """✅ P3升级：强制研报级输出格式"""
         return """
-你是 V 系统的智能分析代理（DS API Agent）。
+你是 V 系统的智能分析代理（DS API Agent）。你的核心职责是生成研报级的市场分析报告。
 
-你的职责：
-1. 理解用户的分析需求
-2. 决定需要调用哪些工具获取数据
-3. 基于数据生成分析结论
-4. 返回结构化的分析报告
+【输出格式要求】你的每次分析必须严格按以下格式输出：
 
-【重要】输出格式要求：
-每次工具调用后，必须生成至少 3 句话的文本总结。
-最终报告必须包含以下三部分：
-1. 📊 数据摘要：（列出所有关键数据点，至少3个）
-2. 📈 分析结论：（给出明确判断，至少2句话）
-3. 💡 操作建议：（给出具体建议，至少2条）
+📊 市场概览
+- 上证指数收盘价和涨跌幅
+- 涨跌家数统计（上涨/下跌/平盘）
+- 市场情绪判断（普涨/震荡/普跌）
 
-禁止只返回工具调用结果而不生成文字总结。
-禁止使用"根据数据..."等模糊表述，必须给出明确结论。
+📈 板块逻辑分析
+- 最强板块：列出信号最强的2-3个板块
+  - 为什么强？（结合回撤数据、相对强度、消息面等）
+  - 是否有持续性？
+- 最弱板块：列出信号最弱的2-3个板块
+  - 为什么弱？
+  - 是否应该回避？
 
-可用工具说明：
-1. get_sector_quote - 获取板块实时行情（价格、涨跌幅）
-2. calculate_drawdown - 计算52周回撤百分比
-3. get_market_environment - 获取市场环境（牛/熊/震荡）
-4. get_north_flow - 获取北向资金净流入/流出
-5. get_sentiment_score - 获取消息面烈度评分（0-10分）
-6. get_holding_signal - 获取持仓基金合并信号
-7. get_extreme_sectors - 获取最强和最弱板块
-8. get_historical_data - 获取板块历史数据
-9. generate_analysis_report - 生成综合分析报告
-10. fetch_webpage - 🔥 抓取网页内容（新闻、公告、研报等）
+⚠️ 风险预警
+- 风险1：[风险名称] | 等级：高/中/低 | 应对建议：[具体建议]
+- 风险2：[风险名称] | 等级：高/中/低 | 应对建议：[具体建议]
 
-规则约束：
+💡 操作建议
+- 针对每个持仓基金给出具体操作（如：009777科技基金：等待企稳，暂不加仓）
+- 明确是加仓、减仓、持有还是观望
+
+📌 总结
+- 一句话概括今日市场核心观点
+
+【数据来源说明】
+所有数据均来自 AKShare（A股行情）、NewsAPI（新闻）、Tushare（备用），分析基于52周回撤、相对强度和消息面烈度评分。
+
+【规则约束】
 1. 每次最多调用 5 个工具
 2. 推理深度不超过 5 层
 3. 工具调用失败时，尝试降级方案
-4. 返回结果必须包含数据来源标注（AKShare/NewsAPI/Tushare）
-5. 网页抓取时优先抓取权威来源（东方财富、同花顺、财联社等）
-
-示例输出：
-📊 数据摘要：
-- 电子板块回撤 0.1%，接近52周高点
-- 计算机板块回撤 55.6%，深度超跌
-- 市场环境：震荡
-📈 分析结论：
-计算机板块回撤充分，接近历史低位，存在反弹机会。
-电子板块相对强势，但追高风险较大。
-💡 操作建议：
-1. 建议关注计算机板块的超跌机会
-2. 电子板块暂不建议追高，等待回调
+4. 每个结论必须有数据支撑
+5. 禁止使用“可能”“或许”等模糊词汇，给出明确判断
 """
 
     def _call_ds_api(self, messages: List[Dict]) -> Optional[Dict]:
-        """调用 DS API"""
         try:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-
+            headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
             payload = {
                 "model": "deepseek-chat",
                 "messages": messages,
@@ -261,72 +195,54 @@ class DSAgent:
                 "max_tokens": 4096,
                 "temperature": 0.3
             }
-
-            response = requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=self.timeout
-            )
-
+            response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=payload, timeout=self.timeout)
             if response.status_code == 200:
                 return response.json()
-            else:
-                logger.error(f"DS API 调用失败: {response.status_code} - {response.text}")
-                return None
-
+            logger.error(f"DS API 调用失败: {response.status_code} - {response.text}")
+            return None
         except Exception as e:
             logger.error(f"DS API 调用异常: {e}")
             return None
 
     def _execute_tool_calls(self, tool_calls: List[Dict]) -> List[Dict]:
-        """执行工具调用"""
         results = []
-
         for tool_call in tool_calls:
             function = tool_call.get("function", {})
             tool_name = function.get("name", "")
             arguments = json.loads(function.get("arguments", "{}"))
-
             logger.info(f"🔧 执行工具: {tool_name}({arguments})")
-
-            # ✅ 通过 Bridge 安全过滤
             allowed, reason = Bridge.filter_request(tool_name, arguments)
             if not allowed:
                 logger.warning(f"🚫 Bridge 拒绝: {reason}")
-                results.append({
-                    "tool_call_id": tool_call.get("id", ""),
-                    "result": {"status": "error", "error": reason}
-                })
+                results.append({"tool_call_id": tool_call.get("id", ""), "result": {"status": "error", "error": reason}})
                 continue
-
-            # 执行工具
             result = execute_tool(tool_name, **arguments)
-
-            # 记录到 Bridge
             Bridge.record_request(tool_name, arguments, result)
-
-            results.append({
-                "tool_call_id": tool_call.get("id", ""),
-                "result": result
-            })
-
+            results.append({"tool_call_id": tool_call.get("id", ""), "result": result})
         return results
 
     # ============================================================
-    # 快捷方法
+    # P3：研报级分析方法
     # ============================================================
+    def get_daily_summary(self) -> Dict:
+        """获取每日摘要（P3升级：研报级）"""
+        query = """请生成今日完整的研报级市场分析报告，包含：市场概览、板块逻辑、风险预警、操作建议、总结五大部分。请确保分析深入、逻辑清晰、建议具体。"""
+        return self.think(query)
+
+    def get_analysis_report(self) -> Dict:
+        """P3新增：专门获取研报级分析报告"""
+        return self.get_daily_summary()
+
     def analyze_sector(self, sector_name: str) -> Dict:
-        """分析单个板块"""
-        query = f"请分析 {sector_name} 板块的当前状态，包括回撤、烈度评分和市场环境"
+        """分析单个板块（P3升级）"""
+        query = f"""请对 {sector_name} 板块进行深入分析，包含：
+        1. 当前行情（价格、回撤、相对强度）
+        2. 逻辑解读：为什么涨/跌？
+        3. 投资建议：是否值得关注？
+        """
         return self.think(query)
 
     def analyze_holdings(self) -> Dict:
-        """分析持仓"""
-        query = "请分析所有持仓基金的当前信号状态，并给出操作建议"
-        return self.think(query)
-
-    def get_daily_summary(self) -> Dict:
-        """获取每日摘要"""
-        query = "请生成今日市场摘要，包括最强/最弱板块、市场环境、北向资金流向"
+        """分析持仓（P3升级）"""
+        query = """请分析所有持仓基金，给出具体操作建议（加仓/减仓/持有/观望），并说明理由。"""
         return self.think(query)
